@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -207,6 +209,18 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+.tfplan*
+*.pem
+*.key
+*service-account*.json
+!*.tfvars.example
+supabase/.temp/
 
 # PyPI configuration file
 .pypirc

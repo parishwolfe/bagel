@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+.venv
+.vscode
+.pytest_cache
+.ruff_cache
+**/__pycache__
+infra
+tests
+supabase/.temp
+*.log
+*.tfstate*

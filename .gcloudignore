@@ -1,0 +1,23 @@
+# Cloud Build only receives the runtime build context. Never upload credentials.
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!poetry.lock
+!poetry.toml
+!README.md
+!components/
+!components/**
+!tools/
+!tools/**
+!supabase/
+!supabase/migrations/
+!supabase/migrations/**
+**/__pycache__/
+**/*.pyc
+**/.env*
+**/*.pem
+**/*.key
+**/*service-account*.json
+**/credentials*.json
+supabase/.temp/

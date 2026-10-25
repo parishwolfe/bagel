@@ -1,0 +1,10 @@
+# Nonsecret deployment record. Pass explicitly with -var-file.
+project_id     = "bagel-512620"
+region         = "us-east4"
+enable_runtime = true
+image          = "us-east4-docker.pkg.dev/bagel-512620/bagel/market-data@sha256:eff35003a76cc0b790c39a594ebc3136b4b03919862cc79fb9195a6a741d8e95"
+secret_versions = {
+  ALPACA_API_KEY    = "1"
+  ALPACA_SECRET_KEY = "1"
+  DATABASE_URL      = "1"
+}

@@ -1,0 +1,54 @@
+[project]
+name = "bagel"
+version = "0.1.0"
+description = "Bagel algorithmic trading platform: market-data foundation"
+authors = [{name = "Bagel contributors"}]
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "alpaca-py>=0.43,<0.44",
+    "httpx>=0.28,<0.29",
+    "psycopg[binary,pool]>=3.2,<4",
+    "pydantic-settings>=2.10,<3",
+    "python-dotenv>=1.2,<2",
+    "typer>=0.16,<1",
+    "prometheus-client>=0.22,<1",
+    "websockets>=15,<18",
+]
+
+[project.scripts]
+bagel-market-data = "bagel_market_data.cli:app"
+
+[tool.poetry]
+packages = [{include = "bagel_market_data", from = "components/market_data/src"}]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.4,<9"
+pytest-asyncio = ">=1.0,<2"
+ruff = ">=0.12,<1"
+pyright = ">=1.1.400,<2"
+
+[build-system]
+requires = ["poetry-core>=2.0,<3"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = ["integration: requires a disposable local PostgreSQL database"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pyright]
+include = ["components/market_data/src", "tools"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["components/market_data/src"]
