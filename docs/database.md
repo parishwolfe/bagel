@@ -5,19 +5,25 @@ DDL is persisted in PostgreSQL and versioned in `supabase/migrations/`:
 
 | Canonical migration | Purpose |
 |---|---|
-| `20261025010646_market_data_foundation.sql` | Instruments, mappings, sources, series, partitioned bars, runs/ranges/cursors, restricted role, maintenance function |
-| `20261025014051_watchlist_capacity_backfills.sql` | Watchlist revisions, capacity resets, bounded recovery and history floor |
-| `20261025020433_watchlist_change_trigger.sql` | Normalize direct watchlist edits and queue historical reloads |
+| `20261025014047_market_data_foundation.sql` | Instruments, mappings, sources, series, partitioned bars, runs/ranges/cursors, restricted role, maintenance function |
+| `20261025014917_watchlist_capacity_backfills.sql` | Watchlist revisions, capacity resets, bounded recovery and history floor |
+| `20261025020628_watchlist_change_trigger.sql` | Normalize direct watchlist edits and queue historical reloads |
 
-The initial application used the Supabase migration API, whose recorded timestamps
-are `20261025014047`, `20261025014917`, and `20261025020628`, with the same migration
-names. `bagel_meta.migrations` additionally records the canonical filenames and
-SHA256 checksums. Use `tools/migrate.py` for subsequent migrations; do not mix its
-history with `supabase db push`. Never edit a migration that has already run.
+The initial SQL was applied using Supabase's migration API. Repository filenames
+now match its recorded versions exactly; the SQL content is byte-identical.
+`supabase_migrations.schema_migrations` is authoritative for both hosted CD and
+local Compose. The pre-CD `bagel_meta.migrations` entries are retained as a private
+historical checksum audit. The local helper can adopt those verified legacy
+filenames without replaying DDL, and refuses hosted database connections.
+
+Production changes deploy through Supabase's GitHub integration on merge to
+`main`. Create new timestamped migration files, review a PR, then verify native
+history and the resulting schema after deployment. Never edit already-applied
+SQL. [CD workflow and verification](supabase-cd.md).
 
 Tables intentionally live in **`market_data`** and **`ingestion`**, not `public`.
 In Supabase Studio's Table Editor, change the schema selector to see them. The
-`bagel_meta` schema contains the private migration ledger. SQL Editor inspection:
+`bagel_meta` schema retains the private legacy checksum audit. SQL Editor inspection:
 
 ```sql
 select table_schema, table_name from information_schema.tables

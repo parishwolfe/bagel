@@ -144,12 +144,22 @@ lock, and losing it stops the worker. Persisted REST coverage repairs buffered
 data lost in a forced termination or extended outage.
 
 Create new migration files with `npx --yes supabase@2.122.0 migration new <name>`.
-Apply reviewed files with `tools/migrate.py`; it uses a checksummed `bagel_meta`
-history and a migration lock. Re-running unchanged migrations is safe. **Do not
-mix this runner with `supabase db push`**, which has a different history table.
-Remote migrations are refused unless `--allow-remote` is explicitly supplied.
-Keep owner credentials out of the worker and image. The hosted worker uses the dedicated `bagel_gcp_worker` login with membership in
-`bagel_ingester`; its credentials are in Secret Manager.
+Hosted migrations deploy through the **Supabase GitHub integration** when a PR
+merges into `main`. Use repository `parishwolfe/bagel`, working directory `.`, and
+Deploy to production enabled for `main`. Supabase's native
+`supabase_migrations.schema_migrations` is the authoritative applied-version ledger.
+The initial migration filenames match the versions already applied by Supabase;
+their SQL contents are unchanged. `supabase/config.toml` selects PostgreSQL 17,
+enables migrations and disables seeds. Production Auth/API settings remain managed
+in the dashboard because no production `[remotes]` configuration is declared.
+
+`tools/migrate.py` is a **local-only Compose helper** using that same native ledger.
+It refuses remote database hosts. It safely adopts verified legacy local checksums
+without reapplying the foundation DDL; `bagel_meta.migrations` remains an auxiliary
+checksum audit, not an independent completion history. Keep database-owner
+credentials out of application images and GitHub. The hosted worker uses the
+dedicated `bagel_gcp_worker` login with membership in `bagel_ingester`; its
+credentials are in Secret Manager. See [Supabase CD](docs/supabase-cd.md).
 
 The Supabase Free project has a 500 MB database allowance. Automatic loads and the
 `backfill` command start at five years and retry **3 → 2 → 1 years** when needed.

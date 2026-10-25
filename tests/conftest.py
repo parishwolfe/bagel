@@ -53,7 +53,7 @@ def database():
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     try:
-        assert migrate(admin, provision_local_role=True) == 3
+        assert migrate(admin, provision_local_role=True) == 4
         yield admin, worker
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
