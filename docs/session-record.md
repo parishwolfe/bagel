@@ -131,3 +131,8 @@ connection for Monday October 26 at 03:59 EDT.
 
 The final-image online diagnostic also succeeded as execution
 `bagel-backfill-5k4zf`; it performed API/schema checks without market-data writes.
+
+The first GitHub Actions run passed Terraform validation but found a service-container
+health-command quoting issue before Python tests started. The runner's argument
+parser requires double quotes around the PostgreSQL health command; the workflow
+was corrected and pushed separately. Local PostgreSQL tests had already passed.

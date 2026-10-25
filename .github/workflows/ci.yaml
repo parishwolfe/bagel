@@ -17,7 +17,7 @@ jobs:
           POSTGRES_PASSWORD: bagel-local-admin
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U bagel_admin -d bagel'
+          --health-cmd "pg_isready -U bagel_admin -d bagel"
           --health-interval 3s --health-timeout 3s --health-retries 20
     env:
       BAGEL_TEST_DATABASE_URL: postgresql://bagel_admin:bagel-local-admin@127.0.0.1:5432/bagel
