@@ -1,0 +1,16 @@
+# The integration working directory is the repository root (.).
+project_id = "bagel"
+
+[db]
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = false
+sql_paths = []
+
+# Deliberately no [remotes.main]: production Auth/API/Storage settings remain
+# managed in the dashboard. GitHub CD deploys versioned SQL migrations only.

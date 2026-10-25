@@ -18,7 +18,7 @@ from bagel_market_data.storage import PostgresStore
 from conftest import make_bar
 from psycopg import sql
 
-from tools.migrate import migrate
+from tools.migrate import LEGACY_FILENAMES, MIGRATIONS, migrate
 
 pytestmark = pytest.mark.integration
 
@@ -370,3 +370,48 @@ def test_parallel_range_failure_remains_resumable(store, settings, database, mon
     with psycopg.connect(database[0]) as conn:
         assert conn.execute("select count(*) from market_data.bars").fetchone()[0] == 2
     assert store.pending_ranges() == 0
+
+
+def test_native_history_is_authoritative_without_checksum_cache(database):
+    admin, _ = database
+    filename = next(MIGRATIONS.glob("*_github_cd_smoke_test.sql")).name
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute("delete from bagel_meta.migrations where version=%s", (filename,))
+    assert migrate(admin) == 0  # Native CD applied it; never replay the CREATE TABLE.
+
+
+def test_verified_legacy_versions_are_adopted_without_replaying_ddl(database):
+    admin, _ = database
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(
+            "insert into market_data.sources(code) values ('migration-upgrade-guard') "
+            "on conflict do nothing"
+        )
+        for new, old in LEGACY_FILENAMES.items():
+            conn.execute("update bagel_meta.migrations set version=%s where version=%s", (old, new))
+            conn.execute(
+                "delete from supabase_migrations.schema_migrations where version=%s",
+                (new.split("_", 1)[0],),
+            )
+    assert migrate(admin) == 0
+    with psycopg.connect(admin) as conn:
+        assert (
+            conn.execute("select count(*) from supabase_migrations.schema_migrations").fetchone()[0]
+            == 4
+        )
+        assert conn.execute(
+            "select 1 from market_data.sources where code='migration-upgrade-guard'"
+        ).fetchone()
+
+
+def test_cd_marker_is_present_and_private(database):
+    admin, worker = database
+    with psycopg.connect(admin) as conn:
+        marker = conn.execute("select marker from public.bagel_cd_smoke_test where id=1").fetchone()
+        assert marker and marker[0].startswith("supabase-github-cd:")
+        assert conn.execute(
+            "select relrowsecurity from pg_class where oid='public.bagel_cd_smoke_test'::regclass"
+        ).fetchone()[0]
+    with psycopg.connect(worker, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("select * from public.bagel_cd_smoke_test")

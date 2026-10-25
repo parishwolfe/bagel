@@ -5,6 +5,7 @@ or manage portfolios. Alpaca credentials belong to a paper account.
 
 - [Architecture and data contracts](architecture.md)
 - [Database, migrations, and completed history](database.md)
+- [Supabase GitHub continuous deployment](supabase-cd.md)
 - [GCP deployment and operations](operations.md)
 - [Credentials and access](security.md)
 - [Session record and verification](session-record.md)
