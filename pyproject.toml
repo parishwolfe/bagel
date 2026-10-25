@@ -23,7 +23,7 @@ bagel-market-data = "bagel_market_data.cli:app"
 packages = [{include = "bagel_market_data", from = "components/market_data/src"}]
 
 [tool.poetry.group.dev.dependencies]
-pytest = ">=8.4,<9"
+pytest = ">=9.0.3,<10"
 pytest-asyncio = ">=1.0,<2"
 ruff = ">=0.12,<1"
 pyright = ">=1.1.400,<2"

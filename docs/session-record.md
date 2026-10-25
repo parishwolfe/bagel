@@ -136,3 +136,10 @@ The first GitHub Actions run passed Terraform validation but found a service-con
 health-command quoting issue before Python tests started. The runner's argument
 parser requires double quotes around the PostgreSQL health command; the workflow
 was corrected and pushed separately. Local PostgreSQL tests had already passed.
+
+The corrected GitHub run `40156223710` passed both Python/container checks and
+Terraform validation. GitHub then reported development-only pytest advisory
+[CVE-2025-71176](https://github.com/advisories/GHSA-6w46-j5rx-g56g). Poetry updated
+pytest from 8.4.2 to 9.1.1 and raised its minimum to 9.0.3. No runtime dependency
+versions changed; the production image installs only the main dependency group.
+All 59 local PostgreSQL tests passed again with the patched test runner.
