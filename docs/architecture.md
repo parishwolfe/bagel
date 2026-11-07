@@ -4,6 +4,11 @@ The monorepo starts with `components/market_data/`. Future frontend, backtesting
 strategies, risk, execution, and additional providers should be separate components.
 Shared ingestion code serves both the persistent worker and the tools in `tools/`.
 
+The proposed strategy research, risk, execution, portfolio, and UI architecture
+is documented in the [trading platform plan](trading-platform-plan.md), including
+MVP long/short support and extension points for additional asset classes. That
+plan describes future components; the implemented runtime below remains ingestion-only.
+
 ```mermaid
 flowchart LR
   A[Alpaca historical REST] --> N[Normalize and classify]

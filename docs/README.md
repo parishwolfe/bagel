@@ -4,6 +4,7 @@ Bagel currently ingests market data only. It does not create orders, run strateg
 or manage portfolios. Alpaca credentials belong to a paper account.
 
 - [Architecture and data contracts](architecture.md)
+- [Trading platform architecture and phased MVP plan](trading-platform-plan.md)
 - [Database, migrations, and completed history](database.md)
 - [Supabase GitHub continuous deployment](supabase-cd.md)
 - [GCP deployment and operations](operations.md)
