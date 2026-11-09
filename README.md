@@ -57,10 +57,11 @@ pre-commit run --all-files
 
 Pre-commit installs the pinned Ruff version in its own isolated environment; no
 global Ruff installation, Poetry setup, or running services are needed for the
-hooks. They use the settings in `pyproject.toml` to check staged Python files for
-lint and formatting issues on each commit, without modifying files. Keep the hook
-revision aligned with Ruff in `poetry.lock`. The all-files command checks the
-whole repository on demand.
+hooks. They use the settings in `pyproject.toml` to lint and automatically format
+staged Python files on each commit. If formatting changes a file, review and stage
+the changes, then retry the commit. Keep the hook revision aligned with Ruff in
+`poetry.lock`. The all-files command lints and formats the whole repository on
+demand.
 
 ## Local Supabase stack
 
