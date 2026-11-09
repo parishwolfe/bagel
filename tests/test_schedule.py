@@ -2,10 +2,11 @@ import asyncio
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from bagel_market_data.domain import NEW_YORK, MarketClock, TradingDay
-from bagel_market_data.observability import Health, Metrics
-from bagel_market_data.runtime import collect
-from bagel_market_data.schedule import CollectionWindow, closure_delay, collection_window
+
+from market.data.domain import NEW_YORK, MarketClock, TradingDay
+from market.data.observability import Health, Metrics
+from market.data.runtime import collect
+from market.data.schedule import CollectionWindow, closure_delay, collection_window
 
 
 class Provider:
@@ -75,8 +76,8 @@ async def test_calendar_refresh_closes_quiet_stream(settings, monkeypatch):
         else:
             raise asyncio.CancelledError
 
-    monkeypatch.setattr("bagel_market_data.runtime.collection_window", decision)
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", sleep)
+    monkeypatch.setattr("market.data.runtime.collection_window", decision)
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", sleep)
     with pytest.raises(asyncio.CancelledError):
         await collect(settings, None, Stream(), asyncio.Queue(), Health(), Metrics())
     assert closed.is_set()

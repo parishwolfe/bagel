@@ -3,8 +3,9 @@ from dataclasses import replace
 
 import psycopg
 import pytest
-from bagel_market_data.capacity import load_watchlist
-from bagel_market_data.watchlist import (
+
+from market.data.capacity import load_watchlist
+from market.data.watchlist import (
     CapacityExceeded,
     HistoryDoesNotFit,
     Watchlist,
@@ -67,7 +68,7 @@ def test_capacity_fallback_tries_5_3_2_and_preserves_success(settings, monkeypat
             kwargs["on_complete"]()
         return {"bars": 100}
 
-    monkeypatch.setattr("bagel_market_data.capacity.ingest_history", ingest)
+    monkeypatch.setattr("market.data.capacity.ingest_history", ingest)
     result = load_watchlist(None, store, settings, store.current)
     assert result["years"] == 2
     assert store.attempts == [5, 3, 2] and store.resets == [3, 2]
@@ -82,7 +83,7 @@ def test_one_year_failure_stops_instead_of_repeated_truncation(settings, monkeyp
         store.used = settings.database_budget_mb * 1_000_000
         raise CapacityExceeded("full")
 
-    monkeypatch.setattr("bagel_market_data.capacity.ingest_history", ingest)
+    monkeypatch.setattr("market.data.capacity.ingest_history", ingest)
     with pytest.raises(HistoryDoesNotFit, match="one year"):
         load_watchlist(None, store, settings, store.current)
     assert store.attempts == [5, 3, 2, 1]
@@ -93,7 +94,7 @@ def test_one_year_failure_stops_instead_of_repeated_truncation(settings, monkeyp
 def test_interrupted_three_year_attempt_resumes_without_retrying_five(settings, monkeypatch):
     store = CapacityStore()
     store.current = replace(store.current, attempt_years=3)
-    monkeypatch.setattr("bagel_market_data.capacity.ingest_history", lambda *_, **__: {"bars": 1})
+    monkeypatch.setattr("market.data.capacity.ingest_history", lambda *_, **__: {"bars": 1})
     assert load_watchlist(None, store, settings, store.current)["years"] == 3
     assert store.attempts == [3] and not store.resets
 
@@ -104,7 +105,7 @@ def test_permission_failure_never_truncates(settings, monkeypatch):
     def denied(*_, **__):
         raise psycopg.errors.InsufficientPrivilege("no access")
 
-    monkeypatch.setattr("bagel_market_data.capacity.ingest_history", denied)
+    monkeypatch.setattr("market.data.capacity.ingest_history", denied)
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         load_watchlist(None, store, settings, store.current)
     assert not store.resets

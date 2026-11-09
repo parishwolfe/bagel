@@ -1,7 +1,8 @@
 import json
 
-from bagel_market_data.cli import app
 from typer.testing import CliRunner
+
+from market.data.cli import app
 
 
 def test_dry_run_and_symbol_override_do_not_connect(monkeypatch):

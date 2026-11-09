@@ -8,6 +8,7 @@
 **/__pycache__
 infra
 tests
+ui
 supabase/.temp
 *.log
 *.tfstate*

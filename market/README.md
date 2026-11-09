@@ -1,4 +1,7 @@
-# Market-data component
+# Market backend
+
+`market/data/` implements market-data ingestion. The backend plan places future
+research, risk, and execution modules alongside it under `market/`.
 
 `domain` owns validated immutable bars and UTC intervals. `ports` defines provider
 capabilities. `providers.alpaca` uses alpaca-py request models and implements the

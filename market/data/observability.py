@@ -64,6 +64,7 @@ class Health:
     connected: bool = False
     session_active: bool = False
     stopping: bool = False
+    stream_enabled: bool = True
 
     @property
     def live(self) -> bool:
@@ -131,6 +132,7 @@ def serve_health(health: Health, metrics: Metrics, port: int) -> ThreadingHTTPSe
                 json.dumps(
                     {
                         "ok": ok,
+                        "stream_enabled": health.stream_enabled,
                         "connected": health.connected,
                         "session_active": health.session_active,
                     }

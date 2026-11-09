@@ -4,15 +4,17 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from bagel_market_data.domain import Instrument
-from bagel_market_data.runtime import run_worker
+
+from market.data.domain import Instrument
+from market.data.runtime import run_worker
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream_enabled", [True, False])
 async def test_worker_serves_probes_and_stops_cleanly(
-    store, settings, unused_tcp_port, monkeypatch
+    store, settings, unused_tcp_port, monkeypatch, stream_enabled
 ):
     class Provider:
         cancelled = False
@@ -31,7 +33,14 @@ async def test_worker_serves_probes_and_stops_cleanly(
 
     settings.health_port = unused_tcp_port
     settings.auto_backfill = True
+    settings.stream_enabled = stream_enabled
     settings.history_start = (settings.eligible_end() - timedelta(days=2)).date().isoformat()
+    if not stream_enabled:
+
+        def unexpected_stream(*args, **kwargs):
+            pytest.fail("REST-only ingestion must not construct a WebSocket client")
+
+        monkeypatch.setattr("market.data.runtime.AlpacaStream", unexpected_stream)
     callbacks = {}
     loop = asyncio.get_running_loop()
     monkeypatch.setattr(loop, "add_signal_handler", lambda sig, cb: callbacks.update({sig: cb}))
@@ -54,6 +63,7 @@ async def test_worker_serves_probes_and_stops_cleanly(
                     pass
             assert ready
             assert response.json()["connected"] is False
+            assert response.json()["stream_enabled"] is stream_enabled
             assert metrics.status_code == 200
         callbacks[signal.SIGTERM]()
         await asyncio.wait_for(task, 5)

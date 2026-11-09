@@ -1,4 +1,4 @@
-name: bagel
+name: bagel-local-supabase
 
 x-app: &app
   image: bagel-market-data:local
@@ -6,15 +6,16 @@ x-app: &app
   read_only: true
   tmpfs:
     - /tmp
-  environment: &app-env
-    DATABASE_URL: postgresql://bagel_worker:bagel-local-worker@db:5432/bagel
-    ALPACA_ENDPOINT: ${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}
+  environment:
+    DATABASE_URL: postgresql://bagel_worker:bagel-local-worker@supabase_db_bagel:5432/postgres
+    ALPACA_ENDPOINT: https://paper-api.alpaca.markets
     ALPACA_API_KEY: ${ALPACA_API_KEY:-}
     ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
     BAGEL_SYMBOLS: ${BAGEL_SYMBOLS:-SPY,QQQ,IWM,VXUS}
     BAGEL_FEED: ${BAGEL_FEED:-iex}
     BAGEL_MAX_HISTORY_YEARS: ${BAGEL_MAX_HISTORY_YEARS:-5}
-    BAGEL_AUTO_BACKFILL: ${BAGEL_AUTO_BACKFILL:-true}
+    BAGEL_AUTO_BACKFILL: ${BAGEL_LOCAL_AUTO_BACKFILL:-false}
+    BAGEL_STREAM_ENABLED: ${BAGEL_LOCAL_STREAM_ENABLED:-false}
     BAGEL_BACKFILL_WORKERS: ${BAGEL_BACKFILL_WORKERS:-4}
     BAGEL_DATABASE_BUDGET_MB: ${BAGEL_DATABASE_BUDGET_MB:-450}
     BAGEL_WATCHLIST_POLL_SECONDS: ${BAGEL_WATCHLIST_POLL_SECONDS:-30}
@@ -24,39 +25,10 @@ x-app: &app
     BAGEL_WINDOW_OPEN: ${BAGEL_WINDOW_OPEN:-04:00}
     BAGEL_WINDOW_CLOSE: ${BAGEL_WINDOW_CLOSE:-20:00}
     BAGEL_HEALTH_PORT: 9090
-  depends_on:
-    migrate:
-      condition: service_completed_successfully
+  networks:
+    - local-supabase
 
 services:
-  db:
-    image: postgres:17-bookworm
-    environment:
-      POSTGRES_DB: bagel
-      POSTGRES_USER: bagel_admin
-      POSTGRES_PASSWORD: bagel-local-admin
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bagel_admin -d bagel"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-  migrate:
-    <<: *app
-    entrypoint: ["python", "tools/migrate.py"]
-    command: ["--provision-local-role"]
-    environment:
-      MIGRATION_DATABASE_URL: postgresql://bagel_admin:bagel-local-admin@db:5432/bagel
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-
   market-data:
     <<: *app
     command: ["run"]
@@ -72,5 +44,7 @@ services:
     healthcheck:
       disable: true
 
-volumes:
-  postgres-data:
+networks:
+  local-supabase:
+    name: bagel-local-supabase
+    external: true

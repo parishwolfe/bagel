@@ -1,4 +1,4 @@
-"""Local Compose migrations using Supabase's native applied-version ledger.
+"""Local migrations and worker login provisioning using Supabase's native ledger.
 
 Hosted migrations belong to the Supabase GitHub integration. This helper refuses
 remote hosts and retains bagel_meta only as a local checksum audit/legacy bridge.

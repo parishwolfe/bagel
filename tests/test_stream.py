@@ -1,9 +1,10 @@
 import json
 
 import pytest
-from bagel_market_data.domain import Origin
-from bagel_market_data.providers.alpaca import AlpacaStream, ProviderError, TransientProviderError
 from test_alpaca import RAW
+
+from market.data.domain import Origin
+from market.data.providers.alpaca import AlpacaStream, ProviderError, TransientProviderError
 
 
 class FakeSocket:

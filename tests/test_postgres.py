@@ -4,7 +4,10 @@ from decimal import Decimal
 
 import psycopg
 import pytest
-from bagel_market_data.domain import (
+from conftest import make_bar
+from psycopg import sql
+
+from market.data.domain import (
     NEW_YORK,
     Instrument,
     Observation,
@@ -13,11 +16,8 @@ from bagel_market_data.domain import (
     TradingDay,
     parse_boundary,
 )
-from bagel_market_data.historical import ingest_history
-from bagel_market_data.storage import PostgresStore
-from conftest import make_bar
-from psycopg import sql
-
+from market.data.historical import ingest_history
+from market.data.storage import PostgresStore
 from tools.migrate import LEGACY_FILENAMES, MIGRATIONS, migrate
 
 pytestmark = pytest.mark.integration
@@ -270,7 +270,7 @@ def test_direct_watchlist_edit_queues_history_and_order_changes_do_not(store, se
 
 
 def test_capacity_reset_reclaims_bars_and_coverage_preserving_metadata(store, settings, database):
-    from bagel_market_data.watchlist import WatchlistChanged
+    from market.data.watchlist import WatchlistChanged
 
     initial = store.configure_watchlist(settings.model_copy(update={"symbols": ["SPY"]}))
     series = register(store)

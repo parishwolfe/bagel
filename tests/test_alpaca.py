@@ -4,8 +4,9 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from bagel_market_data.domain import TimeRange, parse_boundary
-from bagel_market_data.providers.alpaca import AlpacaREST, ProviderError, TransientProviderError
+
+from market.data.domain import TimeRange, parse_boundary
+from market.data.providers.alpaca import AlpacaREST, ProviderError, TransientProviderError
 
 RAW = {
     "t": "2026-10-22T14:00:00Z",

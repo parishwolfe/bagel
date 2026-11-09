@@ -5,12 +5,12 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from bagel_market_data.config import Settings
-from bagel_market_data.domain import Bar
-from bagel_market_data.storage import PostgresStore
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from market.data.config import Settings
+from market.data.domain import Bar
+from market.data.storage import PostgresStore
 from tools.migrate import migrate
 
 

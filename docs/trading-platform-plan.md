@@ -1,15 +1,17 @@
 # Bagel trading platform plan
 
-**Status:** Proposed architecture and delivery plan  
-**Date:** November 3, 2026  
+**Status:** Proposed architecture and delivery plan
+
+**Updated:** November 9, 2026
+
 **Scope:** US equity/ETF long/short research through supervised paper trading, with a path to multiple accounts, brokers, and asset classes.
 
 ## 1. Recommendation
 
 Build a modular Python platform around the existing market-data component. Keep
 research, strategy decisions, risk, execution, and portfolio accounting separate
-in code, while sharing a small set of explicit domain contracts. Deploy the
-always-running trading worker separately from the API and research jobs.
+in code, while sharing a small set of explicit domain contracts. Run the trading
+worker separately from the API and research jobs.
 
 The central configuration unit is a **deployment**:
 
@@ -25,13 +27,38 @@ account. Then enable concurrent deployments on different accounts. Model account
 and deployments explicitly from the first release; defer sharing one account
 between strategies until portfolio allocation and attribution are implemented.
 
+### Local rollout and production hold
+
+Develop and validate the new platform on a local Docker stack backed by the
+Supabase CLI's Docker services. The stack starts with the existing market-data
+worker and repository migrations. Use the single root `compose.yaml` for Bagel
+services and the Supabase CLI to start the local database services. Add research
+jobs, the control API, and trading services as their milestones are implemented.
+The UI is deferred. Use the
+[local startup instructions](../README.md#local-supabase-stack) for the current
+components. The local collector defaults to periodic historical polling so it
+can ingest data while another client uses the account's live connection.
+
+Completion of implementation work includes building and starting the affected
+Docker services, checking readiness, and exercising the relevant end-to-end
+workflow against local Supabase. Leave the stack running for review. Strategy
+tests and backtests use local state and frozen datasets, with explicit test or
+paper environments for broker interactions.
+
+Production rollout is on hold pending local strategy tests, reproducible
+backtests, and explicit user authorization. A merge to `main` can trigger hosted
+Supabase migration deployment through the existing GitHub integration and is
+covered by this hold. The user reports that the existing automation runs daily
+at relatively low cost as of November 9, 2026. Keep its schedule in place while
+validating the platform locally. [Project memory](../AGENTS.md).
+
 ## 2. Starting point, confirmed scope, and remaining defaults
 
 The existing component is the completed ingestion foundation. These observations
 come from repository code and deployment records, not a fresh production audit:
 
 - Python 3.12, Poetry, PostgreSQL 17 on Supabase, and GCP deployment tooling exist.
-- `components/market_data/` already separates provider ports, normalized domain
+- `market/data/` already separates provider ports, normalized domain
   models, Alpaca ingestion, storage, calendars, recovery, and observability.
 - Series identity includes provider, feed, canonical instrument, interval,
   currency, and adjustment. Preserve this distinction across the platform.
@@ -96,7 +123,7 @@ flowchart TB
   P --> R
   P --> S
   C --> S
-  UI[Next.js UI with MUI and Zustand] --> API[Authenticated FastAPI control API]
+  UI[Planned Next.js UI with MUI and Zustand] --> API[Authenticated FastAPI control API]
   API --> DB
   API --> C
   API --> K[Persistent trading controls]
@@ -115,17 +142,17 @@ Use a modular application with these process boundaries:
 | Trading worker | Scheduling, strategy runtime, risk, execution, reconciliation | Always running; one fenced owner per account |
 | Research jobs | Dataset exports, batches, simulations, reports | Bounded CPU/memory and concurrency; no order credentials |
 | Control API | Authenticated reads, validated commands, deployment management | Requests persist work; they do not own trading loops |
-| Next.js web application | App Router pages, MUI components, Zustand client state, research and operations screens | Can restart without interrupting trading |
+| Planned Next.js web application | App Router pages, MUI components, Zustand client state, research and operations screens | Separate Terraform deployment from the backend |
 
 Initially, strategy, risk, execution, and reconciliation are modules inside one
 trading worker. Their interfaces allow later extraction if workload or operating
 needs justify it. Avoid one network service per module in the MVP.
 
-Proposed additions to the repository:
+Repository layout with planned backend modules:
 
 ```text
-components/
-  market_data/         # Existing component; extend its ports carefully
+market/
+  data/               # Implemented market-data ingestion
   trading_domain/      # Small common vocabulary and interfaces
   asset_rules/         # Instrument types, valuation, lifecycle, and financing rules
   strategies/         # Registry, implementations, indicators, evaluation
@@ -135,9 +162,13 @@ components/
   portfolio/          # Ledger, projections, reconciliation
   orchestration/      # Schedules, jobs, deployments, worker ownership
   api/                # Authenticated control and query endpoints
-apps/
-  web/                # Next.js + TypeScript, MUI, Zustand operator application
+ui/                   # Reserved for the future Next.js application
 ```
+
+`market/data/` is the current backend implementation. Add the remaining backend
+modules inside `market/` as their milestones begin. The frontend lives in `ui/`
+and communicates through the backend API. Terraform will manage the frontend
+and backend as separate deployments when hosting is authorized.
 
 Share identity, money/quantity types, clocks, and event envelopes. Keep business
 logic in its owning component. Reuse existing canonical instrument IDs and series;
@@ -295,12 +326,13 @@ Retain current ingestion and add a consumer-facing dataset layer:
 5. Resample using exchange sessions, early closes, and explicit missing-bar rules.
    Never invent tradable prices or silently merge IEX, SIP, and IBKR series.
 
-Export immutable, versioned Parquet datasets to a **new private research artifact
-bucket** in GCS. The existing build-source bucket expires objects and must not
-hold research history. Put manifests and checksums in Supabase; put large data,
-equity curves, detailed simulated fills, and reports in object storage. Use local
-cache and DuckDB/columnar reads in jobs so hundreds of runs do not repeatedly scan
-the operational database. [DuckDB Parquet documentation](https://duckdb.org/docs/stable/data/parquet/overview).
+Export immutable, versioned Parquet datasets through an artifact-store interface.
+Use a persistent local Docker volume for development and a dedicated private GCS
+bucket for a later authorized hosted rollout. Store manifests and checksums in
+Supabase and large datasets, equity curves, simulated fills, and reports in the
+artifact store. Use local cache and DuckDB/columnar reads in jobs so hundreds of
+runs do not repeatedly scan the operational database.
+[DuckDB Parquet documentation](https://duckdb.org/docs/stable/data/parquet/overview).
 
 Each manifest records source/feed and series IDs, instruments/mappings, date
 bounds, session, adjustment, calendar and corporate-action versions, quality
@@ -759,8 +791,9 @@ history replay; neither a new worker nor an object copy alone proves recovery.
 
 ## 13. Operator UI and control API
 
-The confirmed UI stack is **Next.js + TypeScript, Material UI (MUI), and Zustand**.
-FastAPI remains the Python control API. Each layer has a specific responsibility:
+The planned UI in `ui/` uses **Next.js + TypeScript, Material UI (MUI), and
+Zustand**. FastAPI is the planned Python control API under `market/`. The UI
+milestones describe future work and stay deferred until the user authorizes it.
 
 | Layer | Responsibility |
 |---|---|
@@ -881,7 +914,7 @@ until every backend module is complete to build the operator experience.
 
 | Milestone | Deliverables | Acceptance gate |
 |---|---|---|
-| M0: Foundation review and contracts | Confirm remaining defaults; component boundaries; asset-rule and account/data/deployment contracts; capacity/archive decision; adapter fixtures | Existing ingestion tests stay green; contracts preserve identity, signed positions, asset-rule dispatch, and account isolation |
+| M0: Foundation review and contracts | Local Docker Supabase and ingestion baseline, remaining defaults, component and asset-rule contracts, capacity/archive decision, adapter fixtures | Local migrations and worker readiness verified, existing ingestion tests pass, and contracts preserve identity and account isolation |
 | M1: Reproducible research slice | Immutable dataset export, long/short baseline strategy, simulator, short financing/margin scenarios, accounting, run registry, Auth/FastAPI, Next.js shell with MUI theme and Zustand stores, initial research screen | Repeated run matches pinned outputs; no future-data use; accounting/reversals match hand calculations; UI hydration and account-scoped state checks pass |
 | M2: Batch research and selection | Search spaces, bounded job scheduling, comparison UI, chronological validation, promotion records | 100-run benchmark measured; cancellation/retries do not corrupt results; one candidate has a complete, reviewable research record |
 | M3: Account state and operational controls | Alpaca read-only account/borrow/margin adapters, ledger/reconciliation, long/short risk and reservations, ownership, kill controls, account/risk UI | Ineligible shorts and margin breaches block opening risk; restart, external trades, stale snapshots and reservations reconcile; alert and halt drills pass |
@@ -896,6 +929,7 @@ ships later. M3's read-only integration can progress alongside M2 once contracts
 stabilize. Dates and effort estimates follow the M1/M2 benchmark and IBKR spike;
 this plan does not assume a team size or delivery deadline.
 
+Run milestones in the local Docker environment during the production hold.
 Before M4 enablement, run shadow evaluations and a configured supervised paper
 period covering multiple sessions and operational drills. Before unattended paper
 operation, require a declared observation window and sample size, delivered alerts,
@@ -948,7 +982,7 @@ Track research performance regressions separately from correctness checks.
 | Separate data, execution, and asset-rule interfaces | Supports mixed providers and future asset classes | Requires explicit capability, valuation, and lifecycle validation |
 | One strategy per account initially | Gives clear capital ownership and P&L | Uses more accounts; shared accounts require allocator and attribution work |
 | Next.js + MUI + Zustand with FastAPI | Confirmed UI stack; shared components, explicit client state, and Python control contracts | Operate the Next.js runtime; verify SSR/hydration and keep generated API types in sync |
-| GCP runtimes plus Supabase | Builds on current deployment | Cross-cloud latency/egress and IBKR session hosting need measurement |
+| Local Docker and Supabase first | Supports strategy validation with isolated data and services | Hosted GCP/Supabase rollout follows the production hold and later authorization |
 
 Implementation should price additional infrastructure/data requirements against
 the chosen universe, retention, concurrency, and recovery needs.

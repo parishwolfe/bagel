@@ -3,10 +3,11 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 import pytest
-from bagel_market_data.config import Settings
-from bagel_market_data.domain import NEW_YORK, TimeRange, TradingDay, parse_boundary, subtract_years
 from conftest import make_bar
 from pydantic import ValidationError
+
+from market.data.config import Settings
+from market.data.domain import NEW_YORK, TimeRange, TradingDay, parse_boundary, subtract_years
 
 
 def test_dates_and_dst():

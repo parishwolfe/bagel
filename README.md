@@ -14,7 +14,8 @@ are never filled with invented prices.
 
 | Location | Responsibility |
 |---|---|
-| `components/market_data/src/bagel_market_data/` | Domain models, provider ports/adapters, workflows, PostgreSQL repository, worker, CLI |
+| `market/` | Python backend. `market/data/` contains the implemented market-data ingestion package. |
+| `ui/` | Reserved for the future Next.js application and its separate deployment |
 | `tools/` | Backfill, reconciliation, migration, and storage-estimate entry points |
 | `supabase/migrations/` | Canonical versioned PostgreSQL DDL |
 | `infra/gcp/` | Terraform with GCS state and Cloud Build deployment configuration |
@@ -23,7 +24,7 @@ are never filled with invented prices.
 
 ## Python setup
 
-Requires Python 3.12, Poetry 2.3.4, and Docker Compose v2 for the local database.
+Requires Python 3.12, Poetry 2.3.4, and Docker with Compose for local development.
 
 ```sh
 python3 -m venv .venv
@@ -45,31 +46,50 @@ Use a backend login that belongs to `bagel_ingester` for the deployed worker.
 Hosted IPv4 workers should use the **session pooler on port 5432**, with TLS.
 Do not use a transaction pooler for the persistent advisory-lock session.
 
-## Local stack
+## Local Supabase stack
 
-Compose always targets its own PostgreSQL database, regardless of a hosted
-`DATABASE_URL` in `.env`. Credentials shown in Compose are local development
-credentials; database and health ports bind only to loopback.
+Use Docker Desktop and the pinned Supabase CLI for the development stack. Run the
+network creation once to give Supabase and the worker a shared bridge. On macOS,
+Docker Desktop's network port binding preference controls whether the published
+Supabase ports listen on localhost or all interfaces. Start Supabase from the
+repository root so it applies the migrations in `supabase/migrations/`.
 
 ```sh
-docker compose up --build -d db
-docker compose run --build --rm migrate
-docker compose --profile tools run --rm tools check-config
-docker compose --profile tools run --rm tools backfill --dry-run
+docker network create --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 bagel-local-supabase
+npx --yes supabase@2.122.0 start --network-id bagel-local-supabase
 ```
 
-Once Alpaca credentials are complete, a bounded pilot load and live worker can run:
+Supabase Studio is at `http://127.0.0.1:54323`, the API at `http://127.0.0.1:54321`,
+and PostgreSQL at `127.0.0.1:54322`. With the Python environment set up, provision
+the restricted local worker login. The migration helper recognizes the CLI's
+applied migration ledger. The credentials below are local defaults.
 
 ```sh
-docker compose --profile tools run --rm tools backfill --start 2026-10-20 --end 2026-10-22
+MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  BAGEL_LOCAL_WORKER_PASSWORD=bagel-local-worker \
+  .venv/bin/python -m tools.migrate --provision-local-role
 docker compose up --build -d market-data
-docker compose logs -f market-data
+curl -fsS http://127.0.0.1:9090/health/ready
 ```
 
-`docker compose up --build` starts the database, migrations, and worker. Missing
-credentials cause a clear configuration failure. The worker completes the configured
-capacity-aware historical load before starting its live stream. Completed history
-is reused on restart. Stop with `docker compose stop`; existing data remains in the volume.
+`compose.yaml` gives the worker and tools a fixed local database connection on the
+Supabase Docker network. It defaults to periodic Alpaca historical repair, using
+the existing data credentials and the configured historical delay. This avoids
+using a shared WebSocket slot. Set `BAGEL_LOCAL_STREAM_ENABLED=true` when a live
+connection is available. Startup skips the automatic multi-year backfill by
+default. Set `BAGEL_LOCAL_AUTO_BACKFILL=true` to load the full configured history
+at startup. To check the configuration or plan a bounded historical load, run the
+tools from the same Compose file.
+
+```sh
+docker compose --profile tools run --rm tools check-config
+docker compose --profile tools run --rm tools backfill --start 2026-10-20 --end 2026-10-22 --dry-run
+```
+
+Leave the stack running after development smoke checks. To pause it later, run
+`docker compose stop market-data` and then `npx --yes supabase@2.122.0 stop
+--network-id bagel-local-supabase` to retain the local Supabase data for restart.
+[Supabase local development guide](https://supabase.com/docs/guides/local-development).
 
 ## Watchlists and automatic history
 
@@ -153,7 +173,7 @@ their SQL contents are unchanged. `supabase/config.toml` selects PostgreSQL 17,
 enables migrations and disables seeds. Production Auth/API settings remain managed
 in the dashboard because no production `[remotes]` configuration is declared.
 
-`tools/migrate.py` is a **local-only Compose helper** using that same native ledger.
+`tools/migrate.py` is a **local-only migration and login provisioning helper** using that same native ledger.
 It refuses remote database hosts. It safely adopts verified legacy local checksums
 without reapplying the foundation DDL; `bagel_meta.migrations` remains an auxiliary
 checksum audit, not an independent completion history. Keep database-owner
@@ -202,7 +222,7 @@ poetry run ruff check .
 poetry run ruff format --check .
 poetry run pyright
 poetry run pytest -q
-BAGEL_TEST_DATABASE_URL=postgresql://bagel_admin:bagel-local-admin@127.0.0.1:5432/bagel poetry run pytest -q
+BAGEL_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres poetry run pytest -q
 ```
 
 Integration tests create and remove their own temporary local database and refuse
@@ -210,7 +230,7 @@ remote hosts. Without `BAGEL_TEST_DATABASE_URL`, only those tests are skipped.
 No test calls trading/order APIs or writes to hosted Supabase.
 
 See [project documentation](docs/README.md), [GCP operations](docs/operations.md),
-and [architecture notes](components/market_data/README.md) for the deployed setup and extension points.
+and [market backend notes](market/README.md) for the deployed setup and extension points.
 
 ## API references
 

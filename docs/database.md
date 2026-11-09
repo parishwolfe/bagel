@@ -12,7 +12,7 @@ DDL is persisted in PostgreSQL and versioned in `supabase/migrations/`:
 The initial SQL was applied using Supabase's migration API. Repository filenames
 now match its recorded versions exactly; the SQL content is byte-identical.
 `supabase_migrations.schema_migrations` is authoritative for both hosted CD and
-local Compose. The pre-CD `bagel_meta.migrations` entries are retained as a private
+local Supabase. The pre-CD `bagel_meta.migrations` entries are retained as a private
 historical checksum audit. The local helper can adopt those verified legacy
 filenames without replaying DDL, and refuses hosted database connections.
 

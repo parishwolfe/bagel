@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [project.scripts]
-bagel-market-data = "bagel_market_data.cli:app"
+bagel-market-data = "market.data.cli:app"
 
 [tool.poetry]
-packages = [{include = "bagel_market_data", from = "components/market_data/src"}]
+packages = [{include = "market"}]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=9.0.3,<10"
@@ -46,9 +46,8 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pyright]
-include = ["components/market_data/src", "tools"]
+include = ["market", "tools"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-extraPaths = ["components/market_data/src"]

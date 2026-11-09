@@ -289,7 +289,7 @@ async def run_worker(
     settings: Settings, store: PostgresStore, provider: AlpacaREST, reload_settings=None
 ) -> bool:
     """Return True to restart with a changed watchlist or a smaller history window."""
-    health, metrics = Health(), Metrics()
+    health, metrics = Health(stream_enabled=settings.stream_enabled), Metrics()
     server = serve_health(health, metrics, settings.health_port)
     stop, repair_requested = asyncio.Event(), asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -332,7 +332,7 @@ async def run_worker(
                     lambda: [provider.instrument(symbol) for symbol in selected.symbols]
                 )
                 series = await asyncio.to_thread(store.resolve_series, instruments, selected.feed)
-                health.database_ok = True
+                health.database_ok = selected.stream_enabled
 
                 def connection_state(connected):
                     log.info("stream_connection", extra={"connected": connected})
@@ -341,33 +341,37 @@ async def run_worker(
                     if connected:
                         repair_requested.set()
 
-                stream = AlpacaStream(selected, on_connection=connection_state)
                 cursor_key = lock_key + ":" + ",".join(sorted(selected.symbols))
-                writer = asyncio.create_task(
-                    write_batches(selected, store, series, queue, health, metrics)
-                )
-                tasks.extend(
-                    [
+                if selected.stream_enabled:
+                    stream = AlpacaStream(selected, on_connection=connection_state)
+                    writer = asyncio.create_task(
+                        write_batches(selected, store, series, queue, health, metrics)
+                    )
+                    tasks.append(
                         asyncio.create_task(
                             collect(selected, provider, stream, queue, health, metrics)
-                        ),
-                        asyncio.create_task(
-                            repair(
-                                selected,
-                                provider,
-                                store,
-                                series,
-                                cursor_key,
-                                health,
-                                metrics,
-                                repair_requested,
-                            )
-                        ),
-                    ]
+                        )
+                    )
+                else:
+                    log.info("rest_only_ingestion")
+                tasks.append(
+                    asyncio.create_task(
+                        repair(
+                            selected,
+                            provider,
+                            store,
+                            series,
+                            cursor_key,
+                            health,
+                            metrics,
+                            repair_requested,
+                        )
+                    )
                 )
-                done, _ = await asyncio.wait(
-                    [*tasks, writer, stopped], return_when=asyncio.FIRST_COMPLETED
-                )
+                workers = [*tasks, stopped]
+                if writer is not None:
+                    workers.append(writer)
+                done, _ = await asyncio.wait(workers, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
                 return not stop.is_set()

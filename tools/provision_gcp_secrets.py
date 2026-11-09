@@ -10,10 +10,11 @@ import secrets
 import subprocess
 
 import psycopg
-from bagel_market_data.config import Settings
 from dotenv import dotenv_values
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
+
+from market.data.config import Settings
 
 
 def provision(project: str, pooler: str, project_ref: str) -> None:

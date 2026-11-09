@@ -48,6 +48,7 @@ class Settings(BaseSettings):
         default=5, ge=1, le=50, validation_alias="BAGEL_MAX_HISTORY_YEARS"
     )
     auto_backfill: bool = Field(default=True, validation_alias="BAGEL_AUTO_BACKFILL")
+    stream_enabled: bool = Field(default=True, validation_alias="BAGEL_STREAM_ENABLED")
     backfill_workers: int = Field(default=4, ge=1, le=4, validation_alias="BAGEL_BACKFILL_WORKERS")
     database_budget_mb: int = Field(default=450, ge=1, validation_alias="BAGEL_DATABASE_BUDGET_MB")
     watchlist_poll_seconds: int = Field(

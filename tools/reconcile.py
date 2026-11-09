@@ -2,7 +2,7 @@
 
 import sys
 
-from bagel_market_data.cli import app
+from market.data.cli import app
 
 if __name__ == "__main__":
     app(["reconcile", *sys.argv[1:]])

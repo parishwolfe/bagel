@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir "poetry==$POETRY_VERSION" && python -m venv .venv
 COPY pyproject.toml poetry.lock poetry.toml ./
 RUN poetry install --only main --no-root
 COPY README.md ./
-COPY components ./components
+COPY market ./market
 RUN poetry install --only main
 
 FROM python:3.12-slim-bookworm AS runtime
@@ -14,7 +14,7 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 RUN groupadd --gid 10001 bagel && useradd --uid 10001 --gid bagel --no-create-home bagel
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
-COPY --chown=10001:10001 components ./components
+COPY --chown=10001:10001 market ./market
 COPY --chown=10001:10001 tools ./tools
 COPY --chown=10001:10001 supabase/migrations ./supabase/migrations
 USER 10001:10001

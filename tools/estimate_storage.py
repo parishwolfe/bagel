@@ -4,8 +4,9 @@ import json
 import math
 
 import psycopg
-from bagel_market_data.cli import errors
-from bagel_market_data.config import Settings
+
+from market.data.cli import errors
+from market.data.config import Settings
 
 
 def estimate(rows: int, total_bytes: int, symbols: int, years: int, minutes_per_day: int):

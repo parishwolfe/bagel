@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import psycopg
 import pytest
-from bagel_market_data.domain import NEW_YORK, MarketClock, Observation, Origin, TradingDay
-from bagel_market_data.observability import Health, Metrics
-from bagel_market_data.providers.alpaca import TransientProviderError
-from bagel_market_data.runtime import collect, heartbeat, repair, stream_ownership, write_batches
-from bagel_market_data.storage import StreamAlreadyOwned
 from conftest import make_bar
+
+from market.data.domain import NEW_YORK, MarketClock, Observation, Origin, TradingDay
+from market.data.observability import Health, Metrics
+from market.data.providers.alpaca import TransientProviderError
+from market.data.runtime import collect, heartbeat, repair, stream_ownership, write_batches
+from market.data.storage import StreamAlreadyOwned
 
 
 @pytest.mark.asyncio
@@ -28,7 +29,7 @@ async def test_failed_batch_is_retried_and_shutdown_drains(settings, monkeypatch
     async def no_sleep(_):
         pass
 
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", no_sleep)
     store, queue, health, metrics = Store(), asyncio.Queue(maxsize=100), Health(), Metrics()
     item = Observation(make_bar(), "regular", Origin.LIVE, datetime.now(UTC), datetime.now(UTC))
     await queue.put(item)
@@ -77,8 +78,8 @@ async def test_collection_reconnects_and_retains_valid_bars(settings, monkeypatc
     async def stop_on_backoff(_):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("bagel_market_data.runtime.datetime", Clock)
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", stop_on_backoff)
+    monkeypatch.setattr("market.data.runtime.datetime", Clock)
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", stop_on_backoff)
     queue, health, metrics = asyncio.Queue(), Health(), Metrics()
     with pytest.raises(asyncio.CancelledError):
         await collect(settings, Provider(), Stream(), queue, health, metrics)
@@ -100,7 +101,7 @@ async def test_holiday_never_opens_stream(settings, monkeypatch):
     async def stop(_):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", stop)
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", stop)
     health = Health()
     with pytest.raises(asyncio.CancelledError):
         await collect(settings, Provider(), Stream(), asyncio.Queue(), health, Metrics())
@@ -132,11 +133,9 @@ async def test_first_correction_sweep_runs_on_new_container_host(settings, monke
     async def stop(_):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr("bagel_market_data.runtime.time", SimpleNamespace(monotonic=lambda: 0))
-    monkeypatch.setattr(
-        "bagel_market_data.runtime.ingest_history", lambda *a, **kw: calls.append(kw)
-    )
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", stop)
+    monkeypatch.setattr("market.data.runtime.time", SimpleNamespace(monotonic=lambda: 0))
+    monkeypatch.setattr("market.data.runtime.ingest_history", lambda *a, **kw: calls.append(kw))
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", stop)
     with pytest.raises(asyncio.CancelledError):
         await repair(settings, None, Store(), {"SPY": 1}, "test", Health(), Metrics())
     assert len(calls) == 1 and calls[0]["force"]
@@ -163,7 +162,7 @@ async def test_rolling_revision_waits_for_old_owner_and_stays_live(monkeypatch):
     async def wait(_):
         assert health.live and not health.ready
 
-    monkeypatch.setattr("bagel_market_data.runtime.asyncio.sleep", wait)
+    monkeypatch.setattr("market.data.runtime.asyncio.sleep", wait)
     async with stream_ownership(store, "test", health, asyncio.Event()) as connection:
         assert connection == "connection" and store.attempts == 3
     assert store.released
