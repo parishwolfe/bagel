@@ -71,5 +71,6 @@ polls every 30 seconds, backfills pending additions, and updates subscriptions.
 Order-only edits do not cause a reload. A stopped worker handles pending changes
 on its next start. Existing completed symbol ranges are reused.
 
-Local integration tests always use temporary databases on loopback and refuse
-hosted database URLs. Compose credentials are development fixtures only.
+CI does not start a database or run database integration tests. Temporary database
+verification must use isolated local resources and synthetic data, never hosted
+database URLs. Compose credentials are development fixtures only.

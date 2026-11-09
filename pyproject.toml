@@ -27,20 +27,12 @@ bagel-research = "market.research.cli:app"
 packages = [{include = "market"}]
 
 [tool.poetry.group.dev.dependencies]
-pytest = ">=9.0.3,<10"
-pytest-asyncio = ">=1.0,<2"
 ruff = ">=0.12,<1"
 pyright = ">=1.1.400,<2"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
-asyncio_mode = "auto"
-markers = ["integration: requires a disposable local PostgreSQL database"]
 
 [tool.ruff]
 target-version = "py312"

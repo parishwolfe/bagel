@@ -21,7 +21,6 @@ are never filled with invented prices.
 | `supabase/migrations/` | Canonical versioned PostgreSQL DDL |
 | `infra/gcp/` | Terraform with GCS state and Cloud Build deployment configuration |
 | `docs/` | Architecture, database history, GCP operations, security, and session record |
-| `tests/` | Contract, workflow, runtime, and PostgreSQL integration checks |
 
 ## Python setup
 
@@ -46,6 +45,22 @@ uses `DATABASE_URL`, or assembles a TLS connection from `SUPABASE_HOST`,
 Use a backend login that belongs to `bagel_ingester` for the deployed worker.
 Hosted IPv4 workers should use the **session pooler on port 5432**, with TLS.
 Do not use a transaction pooler for the persistent advisory-lock session.
+
+### Git hooks
+
+With `pre-commit` installed, set up the repository's Ruff hooks:
+
+```sh
+pre-commit install --install-hooks
+pre-commit run --all-files
+```
+
+Pre-commit installs the pinned Ruff version in its own isolated environment; no
+global Ruff installation, Poetry setup, or running services are needed for the
+hooks. They use the settings in `pyproject.toml` to check staged Python files for
+lint and formatting issues on each commit, without modifying files. Keep the hook
+revision aligned with Ruff in `poetry.lock`. The all-files command checks the
+whole repository on demand.
 
 ## Local Supabase stack
 
@@ -213,13 +228,12 @@ repair backlog, pending ranges, and the last successful reconciliation.
 poetry run ruff check .
 poetry run ruff format --check .
 poetry run pyright
-poetry run pytest -q
-BAGEL_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres poetry run pytest -q
 ```
 
-Integration tests create and remove their own temporary local database and refuse
-remote hosts. Without `BAGEL_TEST_DATABASE_URL`, only those tests are skipped.
-No test calls trading/order APIs or writes to hosted Supabase.
+CI runs these static checks, validates Compose and Terraform configuration, builds
+the container, and runs a backfill dry-run. It does not start a database or run a
+maintained test suite. Temporary local smoke verification may use synthetic data;
+do not call trading/order APIs or write to hosted Supabase for verification.
 
 See [project documentation](docs/README.md), [GCP operations](docs/operations.md),
 and [market backend notes](market/README.md) for the deployed setup and extension points.

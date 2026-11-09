@@ -55,7 +55,7 @@ Google 7.22.0; Terraform 1.17.0 was used for this rollout.
 
 ## Build and release
 
-Run the tests in the root README, review the diff, and audit source for credentials.
+Run the verification checks in the root README, review the diff, and audit source for credentials.
 The upload list must contain no `.env`, credential JSON, state, plans, or caches:
 
 ```sh
@@ -76,8 +76,10 @@ without changing its image. Do not combine the image change with scaling up: Clo
 Run can briefly restart the previous ready revision. A bounded standby loop also
 keeps new-revision liveness probes healthy while waiting up to five minutes for an
 old owner to drain; it never opens a second stream. REST repair covers the pause. Terraform
-rejects mutable runtime tags. Apply a reviewed saved plan. CI runs tests/build
-checks only; GitHub pushes do not deploy or access production credentials.
+rejects mutable runtime tags. Apply a reviewed saved plan. CI runs static,
+configuration, and build/dry-run checks only, without a database or maintained
+test suite. The CI workflow does not deploy to GCP or access production credentials;
+hosted Supabase migrations use the separate GitHub integration on merges to `main`.
 
 For initial provisioning, apply with `enable_runtime=false`, then run:
 

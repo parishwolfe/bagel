@@ -1,0 +1,7 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: f368fb366ff7f2f808dd324b83a6d32267799e19  # v0.17.2; matches poetry.lock
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+        args: [--check]
