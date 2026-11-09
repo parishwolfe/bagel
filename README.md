@@ -1,8 +1,9 @@
 # Bagel
 
-Bagel is a monorepo for an algorithmic trading platform. The first component ingests
-historical and live US equity/ETF minute bars into PostgreSQL, including hosted Supabase.
-It does not submit orders.
+Bagel is a monorepo for an algorithmic trading platform. The `market/` backend
+contains US equity/ETF ingestion and an offline strategy research workflow.
+Research uses frozen datasets and simulated execution. Broker execution and the
+operator UI are future milestones.
 
 The initial watchlist is **SPY, QQQ, IWM, VXUS**, using **Alpaca IEX**, raw USD prices,
 and a configurable five-year historical range. Collection includes pre/post-market
@@ -14,7 +15,7 @@ are never filled with invented prices.
 
 | Location | Responsibility |
 |---|---|
-| `market/` | Python backend. `market/data/` contains the implemented market-data ingestion package. |
+| `market/` | One Python backend with internal modules for data, strategies, backtesting, risk, simulated execution, portfolio accounting, research, and the API |
 | `ui/` | Reserved for the future Next.js application and its separate deployment |
 | `tools/` | Backfill, reconciliation, migration, and storage-estimate entry points |
 | `supabase/migrations/` | Canonical versioned PostgreSQL DDL |
@@ -61,33 +62,24 @@ npx --yes supabase@2.122.0 start --network-id bagel-local-supabase
 
 Supabase Studio is at `http://127.0.0.1:54323`, the API at `http://127.0.0.1:54321`,
 and PostgreSQL at `127.0.0.1:54322`. With the Python environment set up, provision
-the restricted local worker login. The migration helper recognizes the CLI's
+the restricted research login. The migration helper recognizes the CLI's
 applied migration ledger. The credentials below are local defaults.
 
 ```sh
 MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
-  BAGEL_LOCAL_WORKER_PASSWORD=bagel-local-worker \
-  .venv/bin/python -m tools.migrate --provision-local-role
-docker compose up --build -d market-data
-curl -fsS http://127.0.0.1:9090/health/ready
+  .venv/bin/python -m tools.migrate --provision-research-role
+docker compose up --build -d research-api research-worker
+curl -fsS http://127.0.0.1:8001/health/ready
 ```
 
-`compose.yaml` gives the worker and tools a fixed local database connection on the
-Supabase Docker network. It defaults to periodic Alpaca historical repair, using
-the existing data credentials and the configured historical delay. This avoids
-using a shared WebSocket slot. Set `BAGEL_LOCAL_STREAM_ENABLED=true` when a live
-connection is available. Startup skips the automatic multi-year backfill by
-default. Set `BAGEL_LOCAL_AUTO_BACKFILL=true` to load the full configured history
-at startup. To check the configuration or plan a bounded historical load, run the
-tools from the same Compose file.
+The default Compose services are the offline research API and worker. They
+share the market image and a local artifact volume. The `ingest` profile is
+reserved for separately authorized provider access. Follow the research guide
+to run a synthetic batch or to freeze existing local bars after importing them.
+[Offline research backend](docs/research-backend.md).
 
-```sh
-docker compose --profile tools run --rm tools check-config
-docker compose --profile tools run --rm tools backfill --start 2026-10-20 --end 2026-10-22 --dry-run
-```
-
-Leave the stack running after development smoke checks. To pause it later, run
-`docker compose stop market-data` and then `npx --yes supabase@2.122.0 stop
+Leave the research stack running after development smoke checks. To pause it later,
+run `docker compose stop research-api research-worker` and then `npx --yes supabase@2.122.0 stop
 --network-id bagel-local-supabase` to retain the local Supabase data for restart.
 [Supabase local development guide](https://supabase.com/docs/guides/local-development).
 

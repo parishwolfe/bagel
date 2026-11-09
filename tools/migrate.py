@@ -28,9 +28,17 @@ LEGACY_FILENAMES = {
 }
 
 
-def migrate(dsn: str, *, provision_local_role: bool = False) -> int:
-    host = conninfo_to_dict(dsn).get("host", "")
-    if host not in ("localhost", "127.0.0.1", "::1", "db"):
+def migrate(
+    dsn: str, *, provision_local_role: bool = False, provision_research_role: bool = False
+) -> int:
+    params = conninfo_to_dict(dsn)
+    if (
+        params.get("host") not in ("localhost", "127.0.0.1", "::1", "db")
+        or "hostaddr" in params
+        or "service" in params
+        or os.environ.get("PGHOSTADDR")
+        or os.environ.get("PGSERVICE")
+    ):
         raise ValueError(
             "Remote migration refused; deploy hosted changes through Supabase GitHub CD"
         )
@@ -89,19 +97,30 @@ def migrate(dsn: str, *, provision_local_role: bool = False) -> int:
             conn.execute(
                 sql.SQL("alter role bagel_worker password {}").format(sql.Literal(password))
             )
+        if provision_research_role:
+            if not conn.execute(
+                "select 1 from pg_roles where rolname='bagel_research_worker'"
+            ).fetchone():
+                conn.execute("create role bagel_research_worker login in role bagel_research")
+            conn.execute("alter role bagel_research_worker password 'bagel-local-research'")
     return applied
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provision-local-role", action="store_true")
+    parser.add_argument("--provision-research-role", action="store_true")
     args = parser.parse_args()
     load_dotenv(override=False)
     dsn = os.environ.get("MIGRATION_DATABASE_URL")
     if not dsn:
         parser.exit(1, "Set MIGRATION_DATABASE_URL to a local owner connection string.\n")
     try:
-        count = migrate(dsn, provision_local_role=args.provision_local_role)
+        count = migrate(
+            dsn,
+            provision_local_role=args.provision_local_role,
+            provision_research_role=args.provision_research_role,
+        )
         print(f"Applied {count} migration(s).")
     except Exception as exc:
         parser.exit(1, f"Migration failed ({type(exc).__name__}); verify local migration state.\n")

@@ -395,10 +395,9 @@ def test_verified_legacy_versions_are_adopted_without_replaying_ddl(database):
             )
     assert migrate(admin) == 0
     with psycopg.connect(admin) as conn:
-        assert (
-            conn.execute("select count(*) from supabase_migrations.schema_migrations").fetchone()[0]
-            == 4
-        )
+        assert conn.execute(
+            "select count(*) from supabase_migrations.schema_migrations"
+        ).fetchone()[0] == len(list(MIGRATIONS.glob("*.sql")))
         assert conn.execute(
             "select 1 from market_data.sources where code='migration-upgrade-guard'"
         ).fetchone()

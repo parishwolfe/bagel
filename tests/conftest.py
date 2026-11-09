@@ -11,7 +11,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from market.data.config import Settings
 from market.data.domain import Bar
 from market.data.storage import PostgresStore
-from tools.migrate import migrate
+from tools.migrate import MIGRATIONS, migrate
 
 
 @pytest.fixture
@@ -53,7 +53,8 @@ def database():
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     try:
-        assert migrate(admin, provision_local_role=True) == 4
+        applied = migrate(admin, provision_local_role=True, provision_research_role=True)
+        assert applied == len(list(MIGRATIONS.glob("*.sql")))
         yield admin, worker
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:

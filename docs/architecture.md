@@ -1,15 +1,17 @@
 # Architecture
 
-`market/` houses the Python backend. The implemented `market/data/` package
-serves the persistent ingestion worker and the tools in `tools/`. Future
-backtesting, strategy, risk, and execution modules belong under `market/`.
+`market/` is one Python backend component. Its data, strategy, backtest, risk,
+simulated execution, portfolio, and API packages are internal modules. The
+ingestion, research worker, and research API processes use the same market image.
 The root `ui/` directory is reserved for a separate application and Terraform
 deployment.
 
 The proposed strategy research, risk, execution, portfolio, and UI architecture
 is documented in the [trading platform plan](trading-platform-plan.md), including
 MVP long/short support and extension points for additional asset classes. The
-diagram below shows the implemented ingestion runtime.
+diagram below shows the ingestion runtime. The offline research flow runs from
+an immutable Parquet snapshot to a local queue, simulator, and result artifact.
+[Research runbook](research-backend.md).
 
 ```mermaid
 flowchart LR

@@ -29,15 +29,11 @@ between strategies until portfolio allocation and attribution are implemented.
 
 ### Local rollout and production hold
 
-Develop and validate the new platform on a local Docker stack backed by the
-Supabase CLI's Docker services. The stack starts with the existing market-data
-worker and repository migrations. Use the single root `compose.yaml` for Bagel
-services and the Supabase CLI to start the local database services. Add research
-jobs, the control API, and trading services as their milestones are implemented.
-The UI is deferred. Use the
-[local startup instructions](../README.md#local-supabase-stack) for the current
-components. The local collector defaults to periodic historical polling so it
-can ingest data while another client uses the account's live connection.
+Develop and validate the platform in Docker with local Supabase. The default
+Compose services are the offline research API and worker. The existing collector
+is in an opt-in profile. Keep it stopped during the current Alpaca access hold
+and use synthetic fixtures until the after-hours local data import. The UI is
+deferred. [Local startup instructions](../README.md#local-supabase-stack).
 
 Completion of implementation work includes building and starting the affected
 Docker services, checking readiness, and exercising the relevant end-to-end
@@ -165,10 +161,11 @@ market/
 ui/                   # Reserved for the future Next.js application
 ```
 
-`market/data/` is the current backend implementation. Add the remaining backend
-modules inside `market/` as their milestones begin. The frontend lives in `ui/`
-and communicates through the backend API. Terraform will manage the frontend
-and backend as separate deployments when hosting is authorized.
+`market/` is one backend component. The ingestion, research worker, and API
+run as processes of the same market image. Ingestion and offline research are
+implemented. Broker execution and account orchestration remain planned. The
+frontend lives in `ui/` and communicates through the backend API. Terraform will
+manage frontend and backend as separate deployments when hosting is authorized.
 
 Share identity, money/quantity types, clocks, and event envelopes. Keep business
 logic in its owning component. Reuse existing canonical instrument IDs and series;
@@ -794,6 +791,8 @@ history replay; neither a new worker nor an object copy alone proves recovery.
 The planned UI in `ui/` uses **Next.js + TypeScript, Material UI (MUI), and
 Zustand**. FastAPI is the planned Python control API under `market/`. The UI
 milestones describe future work and stay deferred until the user authorizes it.
+The [cloud deployment plan](cloud-deployment-plan.md) covers on-demand hosting,
+cost estimates, and the gates for a future release.
 
 | Layer | Responsibility |
 |---|---|
@@ -1003,6 +1002,9 @@ the chosen universe, retention, concurrency, and recovery needs.
 5. Choose alert destination and operator coverage, and define the recovery window
    required for supervised versus unattended paper operation.
 
-The next implementation slice is M0 followed by M1: formalize contracts, protect
-dataset reproducibility, and build one end-to-end backtest with its research UI.
-That creates a concrete base for scaling experiments before adding order execution.
+The offline research slice now has frozen datasets, a minute-bar simulator,
+simulated long/short accounting, and durable batch runs exposed through the CLI
+and local FastAPI. The next research step is to import local history after hours
+and run chronological validation with real data. Candidate promotion, automated
+walk-forward analysis, broker account reconciliation, paper routing, and UI
+work remain later milestones. [Research runbook](research-backend.md).

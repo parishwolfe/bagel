@@ -1,7 +1,14 @@
 # Market backend
 
-`market/data/` implements market-data ingestion. The backend plan places future
-research, risk, and execution modules alongside it under `market/`.
+`market/` is one backend component. Its internal modules share types and ship
+in one market image. `market/data/` owns ingestion. `market/strategies/`,
+`market/backtesting/`, `market/risk/`, `market/execution/`, and `market/portfolio/`
+implement the offline simulator. `market/research/` owns datasets and jobs,
+and `market/api/` exposes research operations. The API and worker start as
+separate processes from that same image.
+
+The current developer workflow uses synthetic data and local Supabase. See the
+[research runbook](../docs/research-backend.md) for commands and current limits.
 
 `domain` owns validated immutable bars and UTC intervals. `ports` defines provider
 capabilities. `providers.alpaca` uses alpaca-py request models and implements the

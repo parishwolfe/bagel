@@ -1,11 +1,16 @@
 name: bagel-local-supabase
 
-x-app: &app
-  image: bagel-market-data:local
+x-market: &market
+  image: bagel-market:local
   build: .
   read_only: true
   tmpfs:
     - /tmp
+  networks:
+    - local-supabase
+
+x-ingestion: &ingestion
+  <<: *market
   environment:
     DATABASE_URL: postgresql://bagel_worker:bagel-local-worker@supabase_db_bagel:5432/postgres
     ALPACA_ENDPOINT: https://paper-api.alpaca.markets
@@ -25,12 +30,40 @@ x-app: &app
     BAGEL_WINDOW_OPEN: ${BAGEL_WINDOW_OPEN:-04:00}
     BAGEL_WINDOW_CLOSE: ${BAGEL_WINDOW_CLOSE:-20:00}
     BAGEL_HEALTH_PORT: 9090
-  networks:
-    - local-supabase
+x-research: &research
+  <<: *market
+  entrypoint: ["bagel-research"]
+  volumes:
+    - research-artifacts:/app/research
+
+x-research-env: &research-env
+  BAGEL_RESEARCH_DATABASE_URL: postgresql://bagel_research_worker:bagel-local-research@supabase_db_bagel:5432/postgres
+  BAGEL_RESEARCH_ARTIFACTS: /app/research
 
 services:
+  research-api:
+    <<: *research
+    command: ["serve", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *research-env
+      BAGEL_RESEARCH_AUTH_URL: http://supabase_kong_bagel:8000
+      BAGEL_RESEARCH_AUTH_KEY: ${BAGEL_RESEARCH_AUTH_KEY:-}
+      BAGEL_RESEARCH_OPERATOR_IDS: ${BAGEL_RESEARCH_OPERATOR_IDS:-[]}
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"]
+
+  research-worker:
+    <<: *research
+    command: ["work"]
+    environment: *research-env
+    healthcheck:
+      disable: true
+
   market-data:
-    <<: *app
+    <<: *ingestion
+    profiles: ["ingest"]
     command: ["run"]
     restart: on-failure:5
     ports:
@@ -38,7 +71,7 @@ services:
     stop_grace_period: 10s
 
   tools:
-    <<: *app
+    <<: *ingestion
     profiles: ["tools"]
     command: ["--help"]
     healthcheck:
@@ -48,3 +81,6 @@ networks:
   local-supabase:
     name: bagel-local-supabase
     external: true
+
+volumes:
+  research-artifacts:

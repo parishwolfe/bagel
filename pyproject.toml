@@ -14,10 +14,14 @@ dependencies = [
     "typer>=0.16,<1",
     "prometheus-client>=0.22,<1",
     "websockets>=15,<18",
+    "fastapi>=0.115,<1",
+    "pyarrow>=23,<27",
+    "uvicorn>=0.34,<1",
 ]
 
 [project.scripts]
 bagel-market-data = "market.data.cli:app"
+bagel-research = "market.research.cli:app"
 
 [tool.poetry]
 packages = [{include = "market"}]

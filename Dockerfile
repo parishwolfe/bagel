@@ -12,7 +12,8 @@ RUN poetry install --only main
 FROM python:3.12-slim-bookworm AS runtime
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-RUN groupadd --gid 10001 bagel && useradd --uid 10001 --gid bagel --no-create-home bagel
+RUN groupadd --gid 10001 bagel && useradd --uid 10001 --gid bagel --no-create-home bagel \
+    && install -d -m 0700 -o 10001 -g 10001 /app/research
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
 COPY --chown=10001:10001 market ./market
 COPY --chown=10001:10001 tools ./tools

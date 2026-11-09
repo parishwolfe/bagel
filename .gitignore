@@ -209,6 +209,7 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+.bagel/
 .terraform/
 *.tfstate
 *.tfstate.*
