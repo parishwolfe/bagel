@@ -21,12 +21,12 @@ dependencies = [
 ]
 
 [project.scripts]
-bagel-api = "market.api.cli:app"
+bagel-api = "api.cli:app"
 bagel-market-data = "market.data.cli:app"
 bagel-research = "market.research.cli:app"
 
 [tool.poetry]
-packages = [{include = "market"}]
+packages = [{include = "api"}, {include = "market"}]
 
 [tool.poetry.group.dev.dependencies]
 ruff = ">=0.12,<1"
@@ -37,7 +37,7 @@ requires = ["poetry-core>=2.0,<3"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pyright]
-include = ["market", "tools"]
+include = ["api", "market", "tools"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."

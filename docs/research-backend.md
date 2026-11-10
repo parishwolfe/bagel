@@ -1,7 +1,7 @@
 # Offline research backend
 
 Research, data ingestion, strategy decisions, risk checks, simulation, and
-portfolio accounting are modules of the same `market/` backend. One `api`
+portfolio accounting remain in `market/`; root `api/` is the HTTP control plane. One `api`
 container, named `bagel-api`, runs FastAPI and its research background worker in one process, with
 a persistent volume for Parquet datasets and result artifacts. Local PostgreSQL holds
 manifests, job state, and summaries.
@@ -53,15 +53,26 @@ owns state transitions and workers claim rows with `FOR UPDATE SKIP LOCKED`.
 
 ## Research API
 
-`http://127.0.0.1:8001/docs` lists the research routes. This local-only API has no
-authentication, API keys, or operator allowlist. Compose publishes it only on
-loopback. Runs submitted locally have no authenticated actor. Do not expose it
-publicly; production authentication is deferred and requires a separate design.
+`http://127.0.0.1:8001/docs` lists the research routes. Set `BAGEL_API_KEY` in your
+existing root `.env` before starting the API, then use Swagger's **Authorize**
+button to supply it as `X-API-Key`. All `/v1/research` routes and `/metrics` require
+the key; health probes remain unauthenticated. Do not put the key in a URL,
+command-line argument, log, or client-side bundle. Changing `.env` requires
+recreating the API container; source hot reload does not refresh its environment.
+
+Compose publishes the API only on loopback. The shared key is not an operator
+identity, so runs still have no authenticated actor. Do not expose it publicly;
+production authentication and authorization require a separate design.
 The local connection uses the configured database superuser by explicit choice.
 Application tables live in `public`, with distinct `ingestion_runs` and
 `research_runs` names. Backend roles, grants and RLS remain in SQL for hosted use, but
 the local superuser bypasses RLS. Both pools are SQLAlchemy-managed with
 `pool_pre_ping=True`. [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/).
+
+`api/routes/v1/router.py` assembles feature routers; the research HTTP handlers
+live in `api/routes/v1/research/route.py`. Public contracts live in `api/schemas/`.
+The API uses typed dependencies to access lifespan-owned resources, and read-only
+source mounts enable Uvicorn reload without rebuilding the image for Python edits.
 
 The API lists strategies and datasets, submits batches, returns run and attempt
 status, cancels or retries runs, and serves completed result artifacts. The CLI

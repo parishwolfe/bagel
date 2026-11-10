@@ -1,6 +1,6 @@
 steps:
   - name: gcr.io/cloud-builders/docker
-    args: [build, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/bagel/market-data:$BUILD_ID', .]
+    args: [build, --file, api/dockerfile, --target, collector, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/bagel/market-data:$BUILD_ID', .]
 images:
   - '${_REGION}-docker.pkg.dev/$PROJECT_ID/bagel/market-data:$BUILD_ID'
 substitutions:

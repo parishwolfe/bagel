@@ -1,15 +1,16 @@
 # Architecture
 
-`market/` is one Python backend component. Its data, strategy, backtest, risk,
-simulated execution, portfolio, and API packages are internal modules. The
-ingestion, research worker, and research API processes use the same market image.
-The root `ui/` directory is reserved for a separate application and Terraform
-deployment.
+Root `api/` is the FastAPI control plane. `market/` retains the existing data,
+strategy, backtest, risk, simulated execution, portfolio and research modules.
+Local Compose runs the API and PostgreSQL 17; the API currently owns its offline
+research worker. Optional ingestion remains disabled during the provider hold.
+`api/dockerfile` has distinct API and compatibility collector build targets. The
+root `ui/` directory remains reserved for a separate application and deployment.
 
-The proposed strategy research, risk, execution, portfolio, and UI architecture
-is documented in the [trading platform plan](trading-platform-plan.md), including
-MVP long/short support and extension points for additional asset classes. The
-diagram below shows the ingestion runtime. The offline research flow runs from
+The [platform plan](platform-plan.md) describes the future collector, Redis,
+database-writer and combined strategy/risk/execution nodes. Those boundaries are
+not implemented by the API restructure. The diagram below shows the existing
+ingestion runtime, not the future topology. The offline research flow runs from
 an immutable Parquet snapshot to a local queue, simulator, and result artifact.
 [Research runbook](research-backend.md).
 

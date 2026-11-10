@@ -55,6 +55,11 @@ Google 7.22.0; Terraform 1.17.0 was used for this rollout.
 
 ## Build and release
 
+Hosted builds and releases remain on hold without explicit authorization. The
+build configuration selects the compatibility `collector` target in
+`api/dockerfile`; its entry point and port-9090 probes are unchanged. The API
+target is for the separate control plane, not a replacement hosted collector.
+
 Run the verification checks in the root README, review the diff, and audit source for credentials.
 The upload list must contain no `.env`, credential JSON, state, plans, or caches:
 

@@ -21,7 +21,9 @@ jobs:
       - run: poetry run ruff format --check .
       - run: poetry run pyright
       - run: docker compose config --no-interpolate --no-env-resolution --quiet
-      - run: docker build -t bagel-market-data:ci .
+      - run: docker build --file api/dockerfile --target api -t bagel-api:ci .
+      - run: docker run --rm --entrypoint python bagel-api:ci -c 'from api.main import app; app.openapi()'
+      - run: docker build --file api/dockerfile --target collector -t bagel-market-data:ci .
       - run: docker run --rm bagel-market-data:ci backfill --dry-run
   terraform:
     runs-on: ubuntu-latest

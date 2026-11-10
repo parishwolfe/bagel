@@ -1,4 +1,4 @@
-"""Background modules owned by the single backend API lifecycle."""
+"""Existing background modules, retained until the separately approved node split."""
 
 import asyncio
 import logging

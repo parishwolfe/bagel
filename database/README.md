@@ -20,8 +20,8 @@ files contain no credential values or fallback passwords.
 
 The local superuser connection is intentional. The SQL still retains its
 backend roles, grants, RLS and bounded maintenance functions for compatibility
-with restricted hosted logins. The API has no authentication, is published only
-on loopback, and refuses remote research database hosts. Do not deploy this local
+with restricted hosted logins. The API requires a temporary shared API key, is
+published only on loopback, and refuses remote research database hosts. Do not deploy this local
 configuration as a production access-control model.
 
 ## Provenance

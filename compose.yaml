@@ -3,11 +3,13 @@ name: bagel
 services:
   api:
     container_name: bagel-api
-    image: bagel-market:local
-    build: .
+    image: bagel-api:local
+    build:
+      context: .
+      dockerfile: api/dockerfile
+      target: api
     env_file: .env
-    entrypoint: ["bagel-api"]
-    command: ["--host", "0.0.0.0", "--port", "8001"]
+    command: ["uvicorn", "api.main:app", "--reload", "--reload-dir", "/app/api", "--reload-dir", "/app/market", "--host", "0.0.0.0", "--port", "8001"]
     depends_on:
       db:
         condition: service_healthy
@@ -27,6 +29,8 @@ services:
     tmpfs:
       - /tmp
     volumes:
+      - ./api:/app/api:ro
+      - ./market:/app/market:ro
       - research-artifacts:/app/research
     stop_grace_period: 30s
     healthcheck:

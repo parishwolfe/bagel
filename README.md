@@ -1,7 +1,7 @@
 # Bagel
 
-Bagel is a monorepo for an algorithmic trading platform. The `market/` backend
-contains US equity/ETF ingestion and an offline strategy research workflow.
+Bagel is a monorepo for an algorithmic trading platform. Root `api/` is the
+FastAPI control plane; `market/` contains US equity/ETF ingestion and an offline strategy research workflow.
 Research uses frozen datasets and simulated execution. Broker execution and the
 operator UI are future milestones.
 
@@ -15,7 +15,8 @@ are never filled with invented prices.
 
 | Location | Responsibility |
 |---|---|
-| `market/` | One Python backend with internal modules for data, strategies, backtesting, risk, simulated execution, portfolio accounting, research, and the API |
+| `api/` | FastAPI control plane, global API settings, HTTP contracts, versioned routes, middleware, and `dockerfile` |
+| `market/` | Existing data, strategies, backtesting, risk, simulated execution, portfolio accounting, and research modules |
 | `ui/` | Reserved for the future Next.js application and its separate deployment |
 | `tools/` | Backfill, reconciliation, provisioning, and storage-estimate entry points |
 | `database/ddl/` | Sequential PostgreSQL initialization DDL |
@@ -82,9 +83,11 @@ The database container receives only the values it needs, mapping `DB_USER`,
 There are no literal or fallback database credentials in tracked configuration.
 PostgreSQL has no default password: `DB_PASSWORD` must be supplied at runtime.
 
-The configured database superuser is used locally by explicit choice. The local
-API has **no authentication**, and Compose publishes it only on
-`127.0.0.1:8001`. Do not expose this API or deploy its superuser configuration.
+The configured database superuser is used locally by explicit choice. Set a
+nonempty `BAGEL_API_KEY` in your existing root `.env`; there is no fallback key.
+The API requires it in the `X-API-Key` header on versioned routes and `/metrics`.
+Health probes remain unauthenticated. Compose publishes the API only on
+`127.0.0.1:8001`. Do not expose this API or deploy its superuser/shared-key configuration.
 The existing Docker Desktop database-port binding preference is unchanged.
 
 ```sh
@@ -102,8 +105,30 @@ file does not migrate an existing volume. Do not delete volumes to apply a chang
 curl -fsS http://127.0.0.1:8001/health/ready
 ```
 
-FastAPI's lifecycle owns the backtesting queue worker and optional ingestion task
-in the same backend process. The API imports `.env` through `env_file`, but
+The API starts directly with `uvicorn api.main:app --reload`, using read-only
+source mounts for `api/` and `market/`. Python edits reload without rebuilding;
+dependency changes need a rebuild, and `.env` changes need container recreation.
+Open `http://127.0.0.1:8001/docs` and enter the key through **Authorize**. Never
+put it in URLs, shell arguments or a public frontend bundle. Swagger/OpenAPI
+remain accessible locally; versioned routes and metrics enforce authentication.
+
+To run the API on the host instead of in Compose, keep the database running and
+stop the Compose API first to avoid competing workers and port bindings:
+
+```sh
+docker compose stop api
+poetry run uvicorn api.main:app --reload --reload-dir api --reload-dir market --host 127.0.0.1 --port 8001
+```
+
+`api/main.py` assembles the app, `api/settings.py` holds API-wide configuration
+including the shared database fields, and `api/routes/v1/router.py` assembles
+feature routers. Each feature has a `route.py`; public contracts live in
+`api/schemas/`, and middleware lives under `api/routes/`. `api/models/` is reserved
+for persistence models without replacing the existing native SQL repositories.
+
+FastAPI's lifecycle currently owns the backtesting queue worker and optional ingestion task
+in the same backend process, pending the separately authorized future node split.
+The API imports `.env` through `env_file`, but
 Compose clears `DATABASE_URL` and forces the local `DB_HOST`/`DB_PORT` so a hosted
 URL cannot redirect research. Both database pools use SQLAlchemy 2.1.8 with
 `pool_pre_ping=True`; psycopg retains native SQL, transactions, and COPY support.
@@ -115,7 +140,7 @@ the research guide to run a synthetic batch or freeze existing local bars.
 
 Leave the local stack running after smoke checks. Pause it with
 `docker compose stop`; named volumes are retained. Use `docker compose up --build`
-after backend code changes. Existing database volumes are not adopted, reset or
+after dependency or image changes. Existing database volumes are not adopted, reset or
 deleted. The local stack does not import hosted data.
 [PostgreSQL Docker image](https://github.com/docker-library/docs/tree/master/postgres).
 
@@ -253,12 +278,17 @@ poetry run pyright
 ```
 
 CI runs these static checks, validates Compose and Terraform configuration, builds
-the container, and runs a backfill dry-run. It does not start a database or run a
+both targets from `api/dockerfile`, checks OpenAPI generation, and runs the
+collector's backfill dry-run. The `collector` target preserves the existing hosted
+entry point and port-9090 probes; the `api` target starts Uvicorn. CI does not start a database or run a
 maintained test suite. Temporary local smoke verification may use synthetic data;
 do not call trading/order APIs or write to hosted Supabase for verification.
 
 See [project documentation](docs/README.md), [GCP operations](docs/operations.md),
 and [market backend notes](market/README.md) for the deployed setup and extension points.
+The [platform plan](docs/platform-plan.md) describes future whole-market collection,
+Redis buffering, a separate database writer and a combined strategy/risk/execution
+node. Those services are not part of the API restructuring work.
 
 ## API references
 

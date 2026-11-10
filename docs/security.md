@@ -23,9 +23,18 @@ request and must contain no secret values.
 
 Local Compose reads the five `DB_*` fields, initializes plain PostgreSQL with the
 configured superuser, and uses that connection for the API by explicit user choice.
-The local API has no authentication and is published only on loopback. It refuses
-remote research database hosts. These are local-development decisions, not a
-production security model. Hosted runtime credentials remain restricted and
+The local API requires a nonempty runtime `BAGEL_API_KEY` in the `X-API-Key` header
+on `/v1` routes and `/metrics`. Missing or incorrect keys receive a generic 401;
+comparison is constant-time and keys are never returned or logged. Health probes
+remain unauthenticated. Swagger/OpenAPI remain accessible locally and Swagger's
+Authorize button supplies the header. Responses use `Cache-Control: no-store`.
+Compose injects the existing root `.env`; agents never create or edit that file.
+Source mounts cover only `api/` and `market/`, not the environment file.
+
+The API is published only on loopback and refuses remote research database hosts.
+This shared key is temporary, does not identify an operator, and is not a
+production authorization model. Keep it server-side rather than embedding it in
+a future public frontend. Hosted runtime credentials remain restricted and
 TLS-protected. SQLAlchemy pooling uses `pool_pre_ping=True`, parameter hiding,
 and suppressed raw pool/driver logging; SQL values remain driver-parameterized.
 

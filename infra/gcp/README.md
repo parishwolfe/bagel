@@ -5,6 +5,11 @@ Secret Manager, a Cloud Run worker pool, and two Cloud Run Jobs in `us-east4`.
 See [deployment and operations](../../docs/operations.md) for the deployed inventory,
 release commands, authentication, remote state, monitoring, and rollback.
 
+Cloud Build explicitly selects the `collector` target in root `api/dockerfile`,
+preserving the existing collector entry point and probes. Local Compose selects
+the separate `api` target. Relocating this build file does not authorize a hosted
+build, rollout or schedule change.
+
 `backend.hcl` and `production.tfvars.example` contain only nonsecret resource IDs,
 image digest and secret version identifiers. Actual secret values are provisioned
 outside Terraform with `tools/provision_gcp_secrets.py`. Never add secret values

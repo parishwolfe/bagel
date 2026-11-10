@@ -12,7 +12,7 @@ from psycopg import Error, OperationalError
 from pydantic import TypeAdapter
 from sqlalchemy.exc import SQLAlchemyError
 
-from market.api.cli import serve as serve_api
+from api.cli import serve as serve_api
 from market.backtesting.engine import CashOrSplitEvent
 from market.data.domain import TimeRange, parse_boundary
 from market.data.observability import configure_logging

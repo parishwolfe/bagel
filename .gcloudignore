@@ -1,6 +1,7 @@
 # Cloud Build only receives the runtime build context. Never upload credentials.
 *
-!Dockerfile
+!api/
+!api/**
 !.dockerignore
 !pyproject.toml
 !poetry.lock
