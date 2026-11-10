@@ -9,6 +9,8 @@ from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+from sqlalchemy.exc import OperationalError as PoolOperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from .capacity import load_watchlist
 from .config import Settings
@@ -42,9 +44,7 @@ async def collect(
                         extra={
                             "reason": status.reason,
                             "seconds": delay,
-                            "next_start": status.next_start.isoformat()
-                            if status.next_start
-                            else None,
+                            "next_start": status.next_start.isoformat() if status.next_start else None,
                         },
                     )
                 previous_reason = status.reason
@@ -76,9 +76,7 @@ async def collect(
                 nonlocal status
                 while True:
                     await asyncio.sleep(60)
-                    status = await asyncio.to_thread(
-                        collection_window, settings, provider, datetime.now(UTC)
-                    )
+                    status = await asyncio.to_thread(collection_window, settings, provider, datetime.now(UTC))
                     health.session_active = status.active
                     if not status.allowed:
                         return  # Recheck calendar/clock even when no bars arrive.
@@ -96,9 +94,7 @@ async def collect(
             failures += 1
             delay = min(60, 2 ** min(failures, 6)) + random.uniform(0, 1)
             metrics.reconnects.inc()
-            log.warning(
-                "stream_reconnect", extra={"seconds": delay, "error_type": type(exc).__name__}
-            )
+            log.warning("stream_reconnect", extra={"seconds": delay, "error_type": type(exc).__name__})
             await asyncio.sleep(delay)
 
 
@@ -130,9 +126,7 @@ async def write_batches(
                 metrics.lag.set(
                     max(
                         0,
-                        (
-                            datetime.now(UTC) - max(item.bar.timestamp for item in batch)
-                        ).total_seconds(),
+                        (datetime.now(UTC) - max(item.bar.timestamp for item in batch)).total_seconds(),
                     )
                 )
                 for _ in batch:
@@ -141,6 +135,8 @@ async def write_batches(
                 break
             except (
                 psycopg.OperationalError,
+                PoolOperationalError,
+                PoolTimeout,
                 psycopg.errors.SerializationFailure,
                 psycopg.errors.DeadlockDetected,
             ) as exc:
@@ -161,9 +157,7 @@ async def repair(
     metrics: Metrics,
     wake: asyncio.Event | None = None,
 ) -> None:
-    default = (settings.eligible_end() - timedelta(days=settings.reconcile_days)).replace(
-        hour=0, minute=0
-    )
+    default = (settings.eligible_end() - timedelta(days=settings.reconcile_days)).replace(hour=0, minute=0)
     cursor = await asyncio.to_thread(store.repair_cursor, stream_key, default)
     # Container hosts can have less than one reconciliation interval of uptime.
     # Always run the first correction sweep, independent of the monotonic epoch.
@@ -207,7 +201,12 @@ async def repair(
             health.database_ok = True
         except CapacityExceeded:
             return  # Supervisor restarts through the capacity-aware load.
-        except (TransientProviderError, psycopg.OperationalError) as exc:
+        except (
+            TransientProviderError,
+            psycopg.OperationalError,
+            PoolOperationalError,
+            PoolTimeout,
+        ) as exc:
             log.warning("repair_retry", extra={"error_type": type(exc).__name__})
             # Reload after any failed request or commit. Cursor only advances on committed ranges.
             await asyncio.sleep(30)
@@ -269,9 +268,7 @@ async def stream_ownership(store, stream_key, health, stop):
         while not stop.is_set():
             health.tick = time.monotonic()
             try:
-                connection = await asyncio.to_thread(
-                    stack.enter_context, store.singleton(stream_key)
-                )
+                connection = await asyncio.to_thread(stack.enter_context, store.singleton(stream_key))
             except StreamAlreadyOwned:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Stream ownership transfer timed out") from None
@@ -286,15 +283,29 @@ async def stream_ownership(store, stream_key, health, stop):
 
 
 async def run_worker(
-    settings: Settings, store: PostgresStore, provider: AlpacaREST, reload_settings=None
+    settings: Settings,
+    store: PostgresStore,
+    provider: AlpacaREST,
+    reload_settings=None,
+    *,
+    stop: asyncio.Event | None = None,
+    health: Health | None = None,
+    metrics: Metrics | None = None,
 ) -> bool:
     """Return True to restart with a changed watchlist or a smaller history window."""
-    health, metrics = Health(stream_enabled=settings.stream_enabled), Metrics()
-    server = serve_health(health, metrics, settings.health_port)
-    stop, repair_requested = asyncio.Event(), asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    health, metrics = health or Health(), metrics or Metrics()
+    health.tick = time.monotonic()
+    health.stopping = health.database_ok = health.connected = health.session_active = False
+    health.stream_enabled = settings.stream_enabled
+    server = None
+    # An embedded worker shares the API's shutdown and probe endpoints.
+    if stop is None:
+        stop = asyncio.Event()
+        server = serve_health(health, metrics, settings.health_port)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+    repair_requested = asyncio.Event()
     queue: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_size)
     tasks: list[asyncio.Task] = []
     writer = None
@@ -311,18 +322,14 @@ async def run_worker(
                 selected = Settings.model_validate(
                     {**settings.model_dump(), "symbols": list(snapshot.symbols)}
                 )
-                monitor = asyncio.create_task(
-                    watchlist_updates(settings, store, snapshot, reload_settings)
-                )
+                monitor = asyncio.create_task(watchlist_updates(settings, store, snapshot, reload_settings))
                 tasks.append(monitor)
                 if settings.auto_backfill:
                     loading = asyncio.create_task(
                         asyncio.to_thread(load_watchlist, provider, store, selected, snapshot)
                     )
                     tasks.append(loading)
-                    done, _ = await asyncio.wait(
-                        [*tasks, stopped], return_when=asyncio.FIRST_COMPLETED
-                    )
+                    done, _ = await asyncio.wait([*tasks, stopped], return_when=asyncio.FIRST_COMPLETED)
                     for task in done:
                         task.result()
                     if loading not in done or monitor in done or stop.is_set():
@@ -348,9 +355,7 @@ async def run_worker(
                         write_batches(selected, store, series, queue, health, metrics)
                     )
                     tasks.append(
-                        asyncio.create_task(
-                            collect(selected, provider, stream, queue, health, metrics)
-                        )
+                        asyncio.create_task(collect(selected, provider, stream, queue, health, metrics))
                     )
                 else:
                     log.info("rest_only_ingestion")
@@ -384,9 +389,7 @@ async def run_worker(
                     task.cancel()
                 if stopped is not None:
                     stopped.cancel()
-                await asyncio.gather(
-                    *tasks, *([stopped] if stopped else []), return_exceptions=True
-                )
+                await asyncio.gather(*tasks, *([stopped] if stopped else []), return_exceptions=True)
                 if writer is not None and not writer.done():
                     try:
                         async with asyncio.timeout(5):
@@ -397,5 +400,6 @@ async def run_worker(
                         await asyncio.gather(writer, return_exceptions=True)
     finally:
         health.stopping = True
-        server.shutdown()
-        server.server_close()
+        if server is not None:
+            server.shutdown()
+            server.server_close()

@@ -10,6 +10,5 @@
 infra
 tests
 ui
-supabase/.temp
 *.log
 *.tfstate*

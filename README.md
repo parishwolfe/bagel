@@ -17,8 +17,8 @@ are never filled with invented prices.
 |---|---|
 | `market/` | One Python backend with internal modules for data, strategies, backtesting, risk, simulated execution, portfolio accounting, research, and the API |
 | `ui/` | Reserved for the future Next.js application and its separate deployment |
-| `tools/` | Backfill, reconciliation, migration, and storage-estimate entry points |
-| `supabase/migrations/` | Canonical versioned PostgreSQL DDL |
+| `tools/` | Backfill, reconciliation, provisioning, and storage-estimate entry points |
+| `database/ddl/` | Sequential PostgreSQL initialization DDL |
 | `infra/gcp/` | Terraform with GCS state and Cloud Build deployment configuration |
 | `docs/` | Architecture, database history, GCP operations, security, and session record |
 
@@ -33,16 +33,19 @@ poetry install
 poetry run bagel-market-data backfill --dry-run
 ```
 
-Keep your existing `.env`. Use `.env.example` to add missing settings without
-overwriting credentials. `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are both required.
+Keep your existing `.env`; agents never create or modify secret environment files.
+Required additions are supplied in chat for you to apply. Provider ingestion,
+when authorized, requires `ALPACA_API_KEY` and `ALPACA_SECRET_KEY`.
 `ALPACA_ENDPOINT` is the Trading API endpoint used for assets and calendars;
 market data always uses the documented data/stream endpoints. Paper credentials
 can authenticate to those market-data endpoints; data entitlements still apply.
 
-Supabase's publishable `SUPABASE_KEY` is **not** a PostgreSQL password. Ingestion
-uses `DATABASE_URL`, or assembles a TLS connection from `SUPABASE_HOST`,
-`SUPABASE_PORT`, `SUPABASE_DB`, `SUPABASE_USER`, and `SUPABASE_PASSWORD`.
-Use a backend login that belongs to `bagel_ingester` for the deployed worker.
+Database configuration uses `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USER`, and
+`DB_PASSWORD`. All five are required when using separate fields; passwords need
+no manual URL encoding. These fields take precedence over `DATABASE_URL`.
+The deployed worker can continue receiving `DATABASE_URL` through secret
+injection. Non-local field-based connections require TLS. Use a restricted
+backend login belonging to `bagel_ingester` for the deployed worker.
 Hosted IPv4 workers should use the **session pooler on port 5432**, with TLS.
 Do not use a transaction pooler for the persistent advisory-lock session.
 
@@ -57,47 +60,64 @@ pre-commit run --all-files
 
 Pre-commit installs the pinned Ruff version in its own isolated environment; no
 global Ruff installation, Poetry setup, or running services are needed for the
-hooks. They use the settings in `pyproject.toml` to lint and automatically format
+hooks. They use `ruff.toml` (111-character lines, SQL files excluded) to lint and automatically format
 staged Python files on each commit. If formatting changes a file, review and stage
 the changes, then retry the commit. Keep the hook revision aligned with Ruff in
 `poetry.lock`. The all-files command lints and formats the whole repository on
 demand.
 
-## Local Supabase stack
+## Local PostgreSQL stack
 
-Use Docker Desktop and the pinned Supabase CLI for the development stack. Run the
-network creation once to give Supabase and the worker a shared bridge. On macOS,
-Docker Desktop's network port binding preference controls whether the published
-Supabase ports listen on localhost or all interfaces. Start Supabase from the
-repository root so it applies the migrations in `supabase/migrations/`.
+Use Docker Desktop and Compose from the repository root. The single root
+`compose.yaml` owns exactly two services: `api` (`bagel-api`) and `db`
+(`bagel-db`, standard PostgreSQL 17). No Supabase platform, migration job,
+separate CLI stack, or custom infrastructure wrapper is needed. Hosted
+PostgreSQL remains Supabase and is never contacted by local research.
+
+Supply the five `DB_*` settings listed above in your existing `.env`.
+`DB_HOST=localhost` is for host tools; Compose overrides the API's host to `db`
+and its internal port to 5432. The host database port comes from `DB_PORT`.
+The database container receives only the values it needs, mapping `DB_USER`,
+`DB_PASSWORD`, and `DB_DATABASE` to PostgreSQL's initialization variables.
+There are no literal or fallback database credentials in tracked configuration.
+PostgreSQL has no default password: `DB_PASSWORD` must be supplied at runtime.
+
+The configured database superuser is used locally by explicit choice. The local
+API has **no authentication**, and Compose publishes it only on
+`127.0.0.1:8001`. Do not expose this API or deploy its superuser configuration.
+The existing Docker Desktop database-port binding preference is unchanged.
 
 ```sh
-docker network create --opt com.docker.network.bridge.host_binding_ipv4=127.0.0.1 bagel-local-supabase
-npx --yes supabase@2.122.0 start --network-id bagel-local-supabase
+docker compose up
 ```
 
-Supabase Studio is at `http://127.0.0.1:54323`, the API at `http://127.0.0.1:54321`,
-and PostgreSQL at `127.0.0.1:54322`. With the Python environment set up, provision
-the restricted research login. The migration helper recognizes the CLI's
-applied migration ledger. The credentials below are local defaults.
+Compose builds missing backend images. On a fresh database volume, PostgreSQL's
+entrypoint executes `database/ddl/NNNN.name.sql` in filename order from the
+read-only `/docker-entrypoint-initdb.d/` mount. The API starts after the database
+accepts TCP connections. SQL files are **not rerun on restart**, and adding a new
+file does not migrate an existing volume. Do not delete volumes to apply a change.
+[DDL provenance and lifecycle](database/README.md).
 
 ```sh
-MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
-  .venv/bin/python -m tools.migrate --provision-research-role
-docker compose up --build -d research-api research-worker
 curl -fsS http://127.0.0.1:8001/health/ready
 ```
 
-The default Compose services are the offline research API and worker. They
-share the market image and a local artifact volume. The `ingest` profile is
-reserved for separately authorized provider access. Follow the research guide
-to run a synthetic batch or to freeze existing local bars after importing them.
+FastAPI's lifecycle owns the backtesting queue worker and optional ingestion task
+in the same backend process. The API imports `.env` through `env_file`, but
+Compose clears `DATABASE_URL` and forces the local `DB_HOST`/`DB_PORT` so a hosted
+URL cannot redirect research. Both database pools use SQLAlchemy 2.1.8 with
+`pool_pre_ping=True`; psycopg retains native SQL, transactions, and COPY support.
+Database state and backtest artifacts use separate named volumes.
+Compose forces ingestion, automatic backfill and streaming off during the
+provider hold. Enabling provider access requires separate authorization. Follow
+the research guide to run a synthetic batch or freeze existing local bars.
 [Offline research backend](docs/research-backend.md).
 
-Leave the research stack running after development smoke checks. To pause it later,
-run `docker compose stop research-api research-worker` and then `npx --yes supabase@2.122.0 stop
---network-id bagel-local-supabase` to retain the local Supabase data for restart.
-[Supabase local development guide](https://supabase.com/docs/guides/local-development).
+Leave the local stack running after smoke checks. Pause it with
+`docker compose stop`; named volumes are retained. Use `docker compose up --build`
+after backend code changes. Existing database volumes are not adopted, reset or
+deleted. The local stack does not import hosted data.
+[PostgreSQL Docker image](https://github.com/docker-library/docs/tree/master/postgres).
 
 ## Watchlists and automatic history
 
@@ -164,30 +184,29 @@ ticker text alone never merges securities.
 
 ## Database operations
 
-Native monthly partitions work on PostgreSQL 17 without TimescaleDB. The writer
-can invoke a private, bounded partition-creation function but cannot issue
-arbitrary DDL or delete data. RLS and explicit grants protect private schemas;
+Native monthly partitions work on PostgreSQL 17 without TimescaleDB. A restricted
+hosted writer can invoke a bounded partition-creation function but cannot issue
+arbitrary DDL. The intentionally privileged local superuser bypasses RLS; do not
+treat the local connection as a hosted permission check. All application tables,
+bar partitions and supporting functions live in `public`; RLS and grants remain in DDL.
 no frontend Data API access is granted. A dedicated connection holds the stream
 lock, and losing it stops the worker. Persisted REST coverage repairs buffered
 data lost in a forced termination or extended outage.
 
-Create new migration files with `npx --yes supabase@2.122.0 migration new <name>`.
-Hosted migrations deploy through the **Supabase GitHub integration** when a PR
-merges into `main`. Use repository `parishwolfe/bagel`, working directory `.`, and
-Deploy to production enabled for `main`. Supabase's native
-`supabase_migrations.schema_migrations` is the authoritative applied-version ledger.
-The initial migration filenames match the versions already applied by Supabase;
-their SQL contents are unchanged. `supabase/config.toml` selects PostgreSQL 17,
-enables migrations and disables seeds. Production Auth/API settings remain managed
-in the dashboard because no production `[remotes]` configuration is declared.
+Add schema changes to the next sequential `database/ddl/NNNN.name.sql` file.
+The first four bootstrap files preserve `main`'s original SQL; the fifth retains
+the research tables from `dev`. File `0006` consolidates those historical schemas
+into `public`, preserving data and renaming the two run tables to `ingestion_runs`
+and `research_runs`. See the [existing local database upgrade](database/README.md#subsequent-changes).
+Do not rewrite existing DDL or replay bootstrap
+files against an existing database. The custom migration helper has been removed.
 
-`tools/migrate.py` is a **local-only migration and login provisioning helper** using that same native ledger.
-It refuses remote database hosts. It safely adopts verified legacy local checksums
-without reapplying the foundation DDL; `bagel_meta.migrations` remains an auxiliary
-checksum audit, not an independent completion history. Keep database-owner
-credentials out of application images and GitHub. The hosted worker uses the
-dedicated `bagel_gcp_worker` login with membership in `bagel_ingester`; its
-credentials are in Secret Manager. See [Supabase CD](docs/supabase-cd.md).
+Hosted migrations and releases remain on hold. The existing Supabase GitHub
+integration expects the old timestamped migration path; renaming the repository
+directory does not reconfigure it. Resolve future production migration delivery
+separately before merging a release. The deployed worker retains its restricted
+`bagel_gcp_worker` login and existing Secret Manager credentials and schedule.
+See [hosted migration history](docs/supabase-cd.md).
 
 The Supabase Free project has a 500 MB database allowance. Automatic loads and the
 `backfill` command start at five years and retry **3 → 2 → 1 years** when needed.
@@ -219,8 +238,10 @@ backups, metadata, and future sources need additional headroom.
 
 ## Health and verification
 
-The worker exposes private `/health/live`, `/health/ready`, and `/metrics` routes
-on port 9090. A closed market is healthy without a stream. Logs are JSON and omit
+The local backend exposes `/health/live`, `/health/ready`, and `/metrics` on
+localhost port 8001. Readiness includes its background workers and reports
+ingestion as disabled during offline research. The existing standalone cloud
+collector retains its probes on port 9090. A closed market is healthy without a stream. Logs are JSON and omit
 credentials, response bodies, and raw database exceptions. Metrics include stream
 connectivity, received/written bars, write failures, buffering, ingestion lag,
 repair backlog, pending ranges, and the last successful reconciliation.

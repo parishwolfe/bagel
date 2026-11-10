@@ -14,8 +14,8 @@ to all backend modules under `market/`.
 
 ## Access and observability
 
-- Keep secrets, privileged database operations, and provider credentials server-side. Use the existing restricted runtime roles rather than database-owner credentials.
-- Enforce authorization on protected API operations; validate resource access, not just request shape. Do not broaden CORS, expose internal endpoints, or remove access checks as a shortcut.
+- Keep secrets, privileged database operations, and provider credentials server-side. Hosted runtimes must use restricted roles; the user explicitly chose the configured PostgreSQL superuser for local development only.
+- The local-only API intentionally has no authentication and must remain loopback-published. Do not add Supabase Auth or broaden CORS. Production authentication/authorization is a separate requirement before any rollout.
 - Sanitize errors and logs. Do not log raw transport/database exceptions, request/response bodies, authentication headers, or connection configuration that can contain secrets.
 
 ## Research and verification

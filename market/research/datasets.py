@@ -11,8 +11,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from market.backtesting.engine import CashOrSplitEvent
 from market.data.domain import MINUTE, NEW_YORK, Bar, TimeRange
+from market.database import require_local_database
 from market.research.artifacts import Artifacts, digest_json
-from market.research.config import require_local_database
 
 Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BATCH_ROWS = 16_384
@@ -126,9 +126,9 @@ def export_local(
         metadata = conn.execute(
             """select s.id as series_id, s.instrument_id::text as instrument, src.code as source,
                       s.feed
-                 from market_data.series s
-                 join market_data.sources src on src.id = s.source_id
-                 join market_data.instruments i on i.id = s.instrument_id
+                 from public.series s
+                 join public.sources src on src.id = s.source_id
+                 join public.instruments i on i.id = s.instrument_id
                 where s.id = any(%s) and s.interval_seconds = 60 and s.currency = 'USD'
                   and s.adjustment = 'raw' and i.asset_class = 'us_equity'""",
             (series_ids,),
@@ -139,7 +139,7 @@ def export_local(
             rows.execute(
                 """select s.instrument_id::text as symbol, b.bar_start as timestamp,
                           b.open, b.high, b.low, b.close, b.volume
-                     from market_data.bars b join market_data.series s on s.id = b.series_id
+                     from public.bars b join public.series s on s.id = b.series_id
                     where b.series_id = any(%s) and b.bar_start >= %s and b.bar_start < %s
                       and b.session = 'regular'
                     order by b.bar_start, s.instrument_id""",
@@ -149,8 +149,7 @@ def export_local(
                 artifacts,
                 (Bar(**row, vwap=None, trade_count=None) for row in rows),
                 tuple(
-                    Series(series_id=row[0], instrument=row[1], source=row[2], feed=row[3])
-                    for row in metadata
+                    Series(series_id=row[0], instrument=row[1], source=row[2], feed=row[3]) for row in metadata
                 ),
                 "revised_history",
                 actions,

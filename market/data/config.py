@@ -4,16 +4,21 @@ import re
 from datetime import UTC, datetime, time, timedelta
 from typing import Annotated, Literal
 
-from psycopg.conninfo import make_conninfo
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import NoDecode, SettingsConfigDict
+
+from market.database import DatabaseSettings
 
 from .domain import TimeRange, parse_boundary, subtract_years
 
 
-class Settings(BaseSettings):
+class Settings(DatabaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_ignore_empty=True, extra="ignore", populate_by_name=True
+        env_file=".env",
+        env_ignore_empty=True,
+        extra="ignore",
+        populate_by_name=True,
+        hide_input_in_errors=True,
     )
 
     symbols: Annotated[list[str], NoDecode] = Field(
@@ -26,37 +31,20 @@ class Settings(BaseSettings):
     )
     alpaca_secret_key: SecretStr | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "ALPACA_SECRET_KEY", "ALPACA_API_SECRET", "APCA_API_SECRET_KEY"
-        ),
+        validation_alias=AliasChoices("ALPACA_SECRET_KEY", "ALPACA_API_SECRET", "APCA_API_SECRET_KEY"),
     )
     alpaca_endpoint: str = Field(
         default="https://paper-api.alpaca.markets", validation_alias="ALPACA_ENDPOINT"
     )
-    database_url: SecretStr | None = Field(default=None, validation_alias="DATABASE_URL")
-    supabase_host: str | None = Field(default=None, validation_alias="SUPABASE_HOST", repr=False)
-    supabase_port: int = Field(default=5432, validation_alias="SUPABASE_PORT")
-    supabase_db: str = Field(default="postgres", validation_alias="SUPABASE_DB")
-    supabase_user: str | None = Field(default=None, validation_alias="SUPABASE_USER", repr=False)
-    supabase_password: SecretStr | None = Field(default=None, validation_alias="SUPABASE_PASSWORD")
-    supabase_sslmode: Literal["require", "verify-ca", "verify-full"] = Field(
-        default="require", validation_alias="SUPABASE_SSLMODE"
-    )
     history_start: str | None = Field(default=None, validation_alias="BAGEL_HISTORY_START")
     history_end: str | None = Field(default=None, validation_alias="BAGEL_HISTORY_END")
-    max_history_years: int = Field(
-        default=5, ge=1, le=50, validation_alias="BAGEL_MAX_HISTORY_YEARS"
-    )
+    max_history_years: int = Field(default=5, ge=1, le=50, validation_alias="BAGEL_MAX_HISTORY_YEARS")
     auto_backfill: bool = Field(default=True, validation_alias="BAGEL_AUTO_BACKFILL")
     stream_enabled: bool = Field(default=True, validation_alias="BAGEL_STREAM_ENABLED")
     backfill_workers: int = Field(default=4, ge=1, le=4, validation_alias="BAGEL_BACKFILL_WORKERS")
     database_budget_mb: int = Field(default=450, ge=1, validation_alias="BAGEL_DATABASE_BUDGET_MB")
-    watchlist_poll_seconds: int = Field(
-        default=30, ge=1, validation_alias="BAGEL_WATCHLIST_POLL_SECONDS"
-    )
-    historical_delay_minutes: int = Field(
-        default=15, ge=0, validation_alias="BAGEL_HISTORICAL_DELAY_MINUTES"
-    )
+    watchlist_poll_seconds: int = Field(default=30, ge=1, validation_alias="BAGEL_WATCHLIST_POLL_SECONDS")
+    historical_delay_minutes: int = Field(default=15, ge=0, validation_alias="BAGEL_HISTORICAL_DELAY_MINUTES")
     window_open: time = Field(default=time(4), validation_alias="BAGEL_WINDOW_OPEN")
     window_close: time = Field(default=time(20), validation_alias="BAGEL_WINDOW_CLOSE")
     connection_grace_seconds: int = Field(
@@ -65,15 +53,11 @@ class Settings(BaseSettings):
     correction_grace_seconds: int = Field(
         default=90, ge=30, le=600, validation_alias="BAGEL_CORRECTION_GRACE_SECONDS"
     )
-    requests_per_minute: int = Field(
-        default=180, ge=1, validation_alias="BAGEL_REQUESTS_PER_MINUTE"
-    )
+    requests_per_minute: int = Field(default=180, ge=1, validation_alias="BAGEL_REQUESTS_PER_MINUTE")
     queue_size: int = Field(default=10000, ge=100, validation_alias="BAGEL_QUEUE_SIZE")
     batch_size: int = Field(default=500, ge=1, le=10000, validation_alias="BAGEL_BATCH_SIZE")
     flush_seconds: float = Field(default=1, gt=0, validation_alias="BAGEL_FLUSH_SECONDS")
-    repair_interval_seconds: int = Field(
-        default=300, ge=30, validation_alias="BAGEL_REPAIR_INTERVAL_SECONDS"
-    )
+    repair_interval_seconds: int = Field(default=300, ge=30, validation_alias="BAGEL_REPAIR_INTERVAL_SECONDS")
     reconcile_days: int = Field(default=7, ge=1, le=30, validation_alias="BAGEL_RECONCILE_DAYS")
     reconcile_interval_seconds: int = Field(
         default=21600, ge=300, validation_alias="BAGEL_RECONCILE_INTERVAL_SECONDS"
@@ -102,22 +86,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_window(self):
-        if (
-            self.database_url is None
-            and self.supabase_host
-            and self.supabase_user
-            and self.supabase_password
-        ):
-            self.database_url = SecretStr(
-                make_conninfo(
-                    host=self.supabase_host,
-                    port=self.supabase_port,
-                    dbname=self.supabase_db,
-                    user=self.supabase_user,
-                    password=self.supabase_password.get_secret_value(),
-                    sslmode=self.supabase_sslmode,
-                )
-            )
         if self.window_open >= self.window_close:
             raise ValueError("Collection window must not cross midnight")
         if self.window_open.tzinfo or self.window_close.tzinfo:
@@ -142,9 +110,9 @@ class Settings(BaseSettings):
             raise ValueError("Missing configuration: " + ", ".join(missing))
 
     def eligible_end(self, now: datetime | None = None) -> datetime:
-        return (
-            (now or datetime.now(UTC)) - timedelta(minutes=self.historical_delay_minutes)
-        ).replace(second=0, microsecond=0)
+        return ((now or datetime.now(UTC)) - timedelta(minutes=self.historical_delay_minutes)).replace(
+            second=0, microsecond=0
+        )
 
     def history_window(self, start: str | None = None, end: str | None = None) -> TimeRange:
         eligible = self.eligible_end()
@@ -152,9 +120,7 @@ class Settings(BaseSettings):
         end_value = parse_boundary(end_text) if end_text else eligible
         start_text = start or self.history_start
         start_value = (
-            parse_boundary(start_text)
-            if start_text
-            else subtract_years(end_value, self.max_history_years)
+            parse_boundary(start_text) if start_text else subtract_years(end_value, self.max_history_years)
         )
         window = TimeRange(start_value, end_value)
         if window.start < subtract_years(window.end, self.max_history_years):

@@ -19,7 +19,7 @@ flowchart LR
   B[Alpaca IEX bars and updated bars] --> Q[Bounded queue]
   Q --> N
   N --> P[Transactional PostgreSQL upserts]
-  P --> S[Supabase monthly partitions]
+  P --> S[PostgreSQL monthly partitions]
   W[Persisted watchlist revision] --> H[Resumable historical loader]
   H --> A
   C[Calendar and paper market clock] --> B

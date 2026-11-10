@@ -4,7 +4,8 @@ import time
 from collections.abc import Callable
 
 from psycopg import OperationalError
-from psycopg_pool import PoolTimeout
+from sqlalchemy.exc import OperationalError as PoolOperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from market.backtesting.engine import BacktestSpec, run_backtest
 from market.research.artifacts import Artifacts, canonical_json
@@ -40,13 +41,11 @@ def work_once(queue: Queue, artifacts: Artifacts, stopping: Callable[[], bool] =
         results["summary"]["dataset_availability"] = manifest.availability
         checkpoint(force=True)
         digest = artifacts.write_json(results)
-        if queue.finish(
-            claim, result=digest, summary=json.loads(canonical_json(results["summary"]))
-        ):
+        if queue.finish(claim, result=digest, summary=json.loads(canonical_json(results["summary"]))):
             log.info("research_run_complete", extra={"run_id": str(claim.run_id)})
     except InterruptedRun:
         log.info("research_run_interrupted", extra={"run_id": str(claim.run_id)})
-    except (OperationalError, PoolTimeout):
+    except (OperationalError, PoolOperationalError, PoolTimeout):
         raise
     except Exception as error:
         kind = type(error).__name__

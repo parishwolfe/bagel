@@ -1,5 +1,13 @@
 # Future cloud deployment plan
 
+The current local backend runs as one API container with integrated background
+modules. The independently scheduled collector below describes existing hosted
+automation, which remains unchanged. Any future hosting plan must account for
+background CPU availability in the consolidated backend and receive explicit
+authorization before changing its topology or the existing schedule.
+The scale-to-zero and separate research-worker proposals below need revision
+before rollout of the consolidated backend; they are not deployment instructions.
+
 Start with one operator, a low-cost Next.js UI, and a FastAPI service that
 scales to zero. The dashboard should be usable during regular US equity market
 hours. The initial plan allows a cold start on the first API call after idle.
@@ -8,7 +16,7 @@ arrive independently of dashboard visits.
 [NYSE trading hours](https://www.nyse.com/trade/hours-calendars).
 
 This plan is for a future authorized release. Work continues on `dev` using
-Docker and local Supabase. UI scaffolding requires user authorization. Hosted
+Docker and plain local PostgreSQL. UI scaffolding requires user authorization. Hosted
 changes require local strategy tests, reproducible backtests, and explicit
 release authorization. A merge to `main` can deploy hosted Supabase migrations.
 [Project memory](../AGENTS.md) · [Trading platform plan](trading-platform-plan.md) ·
@@ -23,7 +31,8 @@ release authorization. A merge to `main` can deploy hosted Supabase migrations.
 | Market data | Continue the deployed `bagel-market-data` worker pool on its current schedule. Keep `bagel-backfill` and `bagel-reconcile` as separately invoked maintenance jobs. |
 | Research | Keep cloud compute on demand. Enable hosted batch submission after a separately invoked worker can claim the durable queue, finish a bounded run, and recover an interrupted attempt. Keep metadata in Supabase and immutable datasets and large results in a private GCS artifact bucket when hosted research is authorized. |
 
-The UI loads its shell, signs the operator in with Supabase Auth, and makes its
+Production authentication must be designed separately; the current loopback-only
+local API intentionally has none. The future UI loads its shell, signs the operator in, and makes its
 first `/v1` request when the dashboard needs live data. That request starts
 FastAPI if Cloud Run has scaled to zero. Show a loading state during startup and
 timestamps when presenting live data. Fetch on page open or manual refresh.
@@ -38,7 +47,7 @@ Keep the UI and API under one public origin using an on-demand `/v1` proxy at
 the host or in a thin Next.js handler. Restrict sign-in to the owner. The proxy
 checks the operator's session, invokes the IAM-protected API using a short-lived
 Google ID token in `X-Serverless-Authorization`, and forwards the operator's
-Supabase access token in `Authorization`. FastAPI verifies the operator and
+identity using the separately approved authentication design. FastAPI verifies the operator and
 account permissions on every request. Use separate service identities and
 scoped database access for the API and workers. Store runtime secrets in Secret
 Manager and set `Cache-Control: private, no-store` on account-specific responses.
@@ -77,7 +86,7 @@ and review any sustained increase by service.
    after-hours data import. Run strategy tests and reproduce the baseline
    backtest from a frozen dataset. After UI authorization, verify sign-in,
    dashboard loading, permission checks, refresh, and sign-out in the local stack.
-   [Local startup](../README.md#local-supabase-stack) ·
+   [Local startup](../README.md#local-postgresql-stack) ·
    [Research runbook](research-backend.md).
 2. **Review the first cloud release.** Use separate Terraform deployments for
    frontend and backend. Review the image digest, runtime identities, routing,

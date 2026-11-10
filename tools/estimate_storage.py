@@ -35,10 +35,10 @@ def main():
             settings.database_url.get_secret_value(), autocommit=True, connect_timeout=10
         ) as conn:
             conn.execute("set default_transaction_read_only=on")
-            rows = conn.execute("select count(*) from market_data.bars").fetchone()
+            rows = conn.execute("select count(*) from public.bars").fetchone()
             size = conn.execute(
                 "select coalesce(sum(pg_total_relation_size(inhrelid)),0) "
-                "from pg_inherits where inhparent='market_data.bars'::regclass"
+                "from pg_inherits where inhparent='public.bars'::regclass"
             ).fetchone()
             assert rows and size
         opening, closing = settings.window_open, settings.window_close

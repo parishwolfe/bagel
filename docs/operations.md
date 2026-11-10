@@ -79,7 +79,9 @@ old owner to drain; it never opens a second stream. REST repair covers the pause
 rejects mutable runtime tags. Apply a reviewed saved plan. CI runs static,
 configuration, and build/dry-run checks only, without a database or maintained
 test suite. The CI workflow does not deploy to GCP or access production credentials;
-hosted Supabase migrations use the separate GitHub integration on merges to `main`.
+hosted Supabase migrations remain on hold. The existing GitHub integration
+expects the former timestamped migration path; see the
+[hosted migration history and release hold](supabase-cd.md) before any future release.
 
 For initial provisioning, apply with `enable_runtime=false`, then run:
 

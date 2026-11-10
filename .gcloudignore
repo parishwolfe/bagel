@@ -10,9 +10,6 @@
 !market/**
 !tools/
 !tools/**
-!supabase/
-!supabase/migrations/
-!supabase/migrations/**
 **/__pycache__/
 **/*.pyc
 **/.env*
@@ -20,4 +17,3 @@
 **/*.key
 **/*service-account*.json
 **/credentials*.json
-supabase/.temp/

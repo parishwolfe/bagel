@@ -1,9 +1,11 @@
 # Bagel project memory
 
-- The platform is in local research and validation. Use Docker and the local Supabase stack for development. Follow the [local startup instructions](README.md#local-supabase-stack), run the relevant smoke checks after implementation, and leave the local stack running for review.
+- The platform is in local research and validation. Use Docker and plain PostgreSQL 17 locally; hosted PostgreSQL remains Supabase. Follow the [local startup instructions](README.md#local-postgresql-stack), run relevant smoke checks, and leave the local stack running for review.
 - Current backend work is offline from Alpaca. Keep the local ingestion worker stopped, use synthetic fixtures, and wait for the user's after-hours data pull before importing market history. Keep implementation on `dev`.
 - Use the existing machine-wide Docker Desktop port binding preference for Bagel's local stack.
-- Keep one root `compose.yaml`. Data, research, risk, portfolio, execution, and the control API are modules of one `market/` backend component. Reserve `ui/` for the separate frontend and wait for authorization to scaffold it. Plan separate Terraform deployments for the frontend and backend.
+- Keep one root `compose.yaml` that starts the entire local stack with `docker compose up`: `api` (container `bagel-api`) and `db` (standard PostgreSQL). Mount sequential `database/ddl/NNNN.name.sql` files into PostgreSQL's initialization directory; they run only on an empty data volume. Read `main` using read-only Git operations when recovering baseline DDL. Data, research, risk, portfolio, execution, and the control API remain modules of one `market/` backend; background work belongs to the API lifecycle. Reserve `ui/` for the separate frontend and wait for authorization to scaffold it. Plan separate Terraform deployments for the frontend and backend.
+- Explicit local-development decision: use the configured PostgreSQL superuser and no API authentication. Publish the API only on loopback, keep research local-only, and never carry these settings into production. Do not add Supabase Auth, client keys, or other local Supabase services. SQLAlchemy manages pooled connections with `pool_pre_ping=True`; preserve transaction and COPY behavior.
+- All application tables, partitions and supporting functions belong in `public`. Keep domain boundaries in Python modules, not separate database schemas. `ingestion_runs` and `research_runs` distinguish the two run tables. Preserve historical DDL; use forward-only files for changes.
 - Production rollout is on hold pending local strategy tests, reproducible backtests, and explicit user authorization. The hosted Supabase GitHub integration makes a merge to `main` a production release path for migrations. Apply the same hold to hosted database changes, cloud releases, and broker deployments.
 - As of November 9, 2026, the user reports that the existing automation runs daily and costs are relatively low. Keep its current schedule during local development.
 - The [trading platform plan](docs/trading-platform-plan.md) is the source for scope and milestones. The MVP covers long and short US stocks/ETFs on completed one-minute bars or slower. The planned UI uses Next.js, MUI, and Zustand with a FastAPI control API.
@@ -14,10 +16,17 @@ These rules apply throughout the repository, including `tools/`, `.github/`, and
 the reserved `ui/` directory. Nested `AGENTS.md` files add area-specific rules;
 they do not authorize exceptions to the security or approval requirements here.
 
+### Fact-based development
+
+- **Do not rely on assumptions.** Use only facts, files, and APIs verified in the codebase or provided context. Check the actual code and configuration, and consult the relevant authoritative documentation for the versions in use before relying on external API or tool behavior.
+- If a requirement, constraint, or other critical detail remains missing or ambiguous after checking the available sources, pause the affected work and ask the user for clarification before proceeding.
+- Before reporting completion, compare the actual result with every requested requirement and the applicable project instructions. Claim completion only when the result has been verified. Report any deviations, unfinished work, or verification gaps.
+
 ### Secrets and sensitive information
 
 - Never commit credentials, private keys, database connection strings containing secrets, credential JSON, Terraform state/plans, or local secret configuration. Follow [the security guide](docs/security.md).
-- Preserve the existing `.env`. Do not open secret-bearing files unless necessary for the requested work; never display their values. Document configuration with placeholders in `.env.example`, not copied credentials.
+- Never create or modify `.env` or other secret-bearing environment files. `.env.example` may be changed only when the user explicitly requests it, and must contain no secret values. Provide required `.env` changes as a fenced code block in chat for the user to apply. Never open secret-bearing files merely to wire configuration keys; use the provided key names without reading values. Do not open them unless necessary for authorized work, and never display their values.
+- Never hardcode database credentials, including local/development passwords or credential-bearing connection strings, in code, Compose, scripts, migrations, or documentation. Require explicit runtime configuration and fail safely when it is missing; no fallback credentials. Load local API configuration through Compose `env_file: .env`, and limit infrastructure containers to the environment values they need.
 - Never put secrets in logs, error messages, metrics, command-line arguments, shell history, Docker build arguments, image layers, or documentation. Use the existing runtime secret injection and stdin-based provisioning patterns.
 - Avoid commands that dump environments, resolved Compose configuration, tokens, or raw credential-bearing responses. Report configuration presence or validity without printing values.
 - If a secret is exposed, do not repeat it. Notify the user and request authorization for rotation or remediation; do not silently rotate credentials or rewrite Git history.

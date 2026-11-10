@@ -4,10 +4,19 @@
 in one market image. `market/data/` owns ingestion. `market/strategies/`,
 `market/backtesting/`, `market/risk/`, `market/execution/`, and `market/portfolio/`
 implement the offline simulator. `market/research/` owns datasets and jobs,
-and `market/api/` exposes research operations. The API and worker start as
-separate processes from that same image.
+and `market/api/` exposes research operations. Local Compose runs one `api`
+container and one backend process. FastAPI's lifecycle starts the research worker
+as bounded background work and optionally starts the ingestion task. Ingestion
+is disabled by default during offline research. CPU-bound backtests run off the
+API event loop. The existing standalone collector CLI remains available for the
+currently deployed automation.
 
-The current developer workflow uses synthetic data and local Supabase. See the
+The current developer workflow uses synthetic data and plain local PostgreSQL 17.
+`market/database.py` shares the five `DB_*` settings and SQLAlchemy engines with
+`pool_pre_ping=True`. Existing psycopg SQL, transaction and COPY behavior is retained.
+The local API intentionally has no authentication and uses the configured local
+superuser; Compose publishes it only on loopback. Hosted PostgreSQL remains Supabase.
+See the
 [research runbook](../docs/research-backend.md) for commands and current limits.
 
 `domain` owns validated immutable bars and UTC intervals. `ports` defines provider

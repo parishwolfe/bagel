@@ -16,8 +16,18 @@ GCP Secret Manager stores only these application secrets:
 
 Secret values are submitted through stdin, never command-line arguments.
 Terraform manages the containers and access grants, not secret versions/contents.
-Deployments pin explicit version identifiers. The local Supabase administrator
-password and publishable API key are not uploaded. `.env` is preserved unchanged.
+Deployments pin explicit version identifiers. Local database credentials are never
+uploaded. `.env` is preserved unchanged and need not be opened to reference its
+configuration keys. `.env.example` may be edited only at the user's explicit
+request and must contain no secret values.
+
+Local Compose reads the five `DB_*` fields, initializes plain PostgreSQL with the
+configured superuser, and uses that connection for the API by explicit user choice.
+The local API has no authentication and is published only on loopback. It refuses
+remote research database hosts. These are local-development decisions, not a
+production security model. Hosted runtime credentials remain restricted and
+TLS-protected. SQLAlchemy pooling uses `pool_pre_ping=True`, parameter hiding,
+and suppressed raw pool/driver logging; SQL values remain driver-parameterized.
 
 `bagel_gcp_worker` is a dedicated Supabase LOGIN inheriting `bagel_ingester`, with
 no superuser, create-role, create-database, replication, or RLS-bypass capability.

@@ -17,7 +17,6 @@ RUN groupadd --gid 10001 bagel && useradd --uid 10001 --gid bagel --no-create-ho
 COPY --from=builder --chown=10001:10001 /app/.venv /app/.venv
 COPY --chown=10001:10001 market ./market
 COPY --chown=10001:10001 tools ./tools
-COPY --chown=10001:10001 supabase/migrations ./supabase/migrations
 USER 10001:10001
 EXPOSE 9090
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD python -c \

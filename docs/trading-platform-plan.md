@@ -10,8 +10,9 @@
 
 Build a modular Python platform around the existing market-data component. Keep
 research, strategy decisions, risk, execution, and portfolio accounting separate
-in code, while sharing a small set of explicit domain contracts. Run the trading
-worker separately from the API and research jobs.
+in code, while sharing a small set of explicit domain contracts. Run one backend
+container: the API lifecycle owns background ingestion and research work. Future
+trading loops belong to this backend and require separate implementation and approval.
 
 The central configuration unit is a **deployment**:
 
@@ -29,15 +30,17 @@ between strategies until portfolio allocation and attribution are implemented.
 
 ### Local rollout and production hold
 
-Develop and validate the platform in Docker with local Supabase. The default
-Compose services are the offline research API and worker. The existing collector
-is in an opt-in profile. Keep it stopped during the current Alpaca access hold
+Develop and validate the platform in Docker with plain local PostgreSQL 17. The default
+Compose service is `api`, with integrated research background work. Its optional
+ingestion task is disabled by default. Keep ingestion stopped during the current Alpaca access hold
 and use synthetic fixtures until the after-hours local data import. The UI is
-deferred. [Local startup instructions](../README.md#local-supabase-stack).
+deferred. The local API has no authentication and uses the configured local
+superuser by explicit choice; do not expose it beyond loopback or deploy it as-is.
+[Local startup instructions](../README.md#local-postgresql-stack).
 
 Completion of implementation work includes building and starting the affected
 Docker services, checking readiness, and exercising the relevant end-to-end
-workflow against local Supabase. Leave the stack running for review. Strategy
+workflow against local PostgreSQL. Leave the stack running for review. Strategy
 tests and backtests use local state and frozen datasets, with explicit test or
 paper environments for broker interactions.
 
@@ -130,19 +133,20 @@ flowchart TB
   P --> DB
 ```
 
-Use a modular application with these process boundaries:
+Use one backend container with these internal responsibilities:
 
-| Runtime | Responsibility | Failure/resource isolation |
+| Module | Responsibility | Runtime ownership |
 |---|---|---|
-| Existing ingestion worker | Provider connections, history, corrections, data health | Remains independently deployable |
-| Trading worker | Scheduling, strategy runtime, risk, execution, reconciliation | Always running; one fenced owner per account |
-| Research jobs | Dataset exports, batches, simulations, reports | Bounded CPU/memory and concurrency; no order credentials |
-| Control API | Authenticated reads, validated commands, deployment management | Requests persist work; they do not own trading loops |
+| Market data | Provider connections, history, corrections, data health | Optional API lifecycle task; disabled during the provider hold |
+| Trading runtime (planned) | Scheduling, strategy runtime, risk, execution, reconciliation | Future backend background work; one fenced owner per account |
+| Research jobs | Dataset exports, batches, simulations, reports | One API-owned background worker; backtests execute off the HTTP event loop |
+| Control API | Authenticated reads, validated commands, deployment management | Owns background startup, shutdown, and readiness; requests persist work |
 | Planned Next.js web application | App Router pages, MUI components, Zustand client state, research and operations screens | Separate Terraform deployment from the backend |
 
-Initially, strategy, risk, execution, and reconciliation are modules inside one
-trading worker. Their interfaces allow later extraction if workload or operating
-needs justify it. Avoid one network service per module in the MVP.
+Strategy, risk, execution, and reconciliation remain internal backend modules.
+Do not add separate backend containers without user authorization. The existing
+deployed collector keeps its current schedule until an explicitly authorized
+production transition; local consolidation does not change that automation.
 
 Repository layout with planned backend modules:
 
@@ -161,8 +165,9 @@ market/
 ui/                   # Reserved for the future Next.js application
 ```
 
-`market/` is one backend component. The ingestion, research worker, and API
-run as processes of the same market image. Ingestion and offline research are
+`market/` is one backend component. The API and research worker run in one process
+in the single local `api` container; ingestion is an optional task of that process.
+Ingestion and offline research are
 implemented. Broker execution and account orchestration remain planned. The
 frontend lives in `ui/` and communicates through the backend API. Terraform will
 manage frontend and backend as separate deployments when hosting is authorized.
@@ -714,10 +719,11 @@ for the UI. Keep high-volume research traces outside Postgres, prune delivered
 transient work under a documented retention policy, and retain ledger/audit
 history independently. Do not stream every bar to every browser.
 
-Keep backend schemas private with scoped database roles and RLS/grants. Separate
+Keep application tables in `public`, with scoped database roles and RLS/grants. Separate
 ingestion, research, API, and execution privileges; the current ingester role
-must not gain order access. Version schema changes using the existing Supabase
-migration/CD workflow, with compatible application rollouts.
+must not gain order access. Version local schema changes in sequential
+`database/ddl/` files. Hosted migration delivery and compatible application
+rollouts require a separately approved release process; production is on hold.
 
 ## 12. Monitoring, controls, and recovery
 
@@ -830,12 +836,11 @@ lifecycle; command success comes from the API's observed result. Scope responses
 by user/account/environment and discard stale in-flight results after a switch.
 [Zustand Next.js guide](https://github.com/pmndrs/zustand/blob/main/docs/learn/guides/nextjs.md).
 
-Use Supabase Auth for sign-in. The API validates token signature, issuer, audience,
-and expiry and checks server-owned operator/account permissions on every action.
-Keep broker/database secrets server-side; do not base authorization on editable
-user metadata. Use restricted signup for the initial owner account and require
-strong authentication for trading controls.
-[Supabase JWT documentation](https://supabase.com/docs/guides/auth/jwts).
+Authentication is deliberately absent from the current loopback-only local API.
+Before hosting, choose and implement an authentication design and server-owned
+operator/account authorization on every action. Keep broker/database secrets
+server-side; do not base authorization on editable user metadata. Require strong
+authentication for trading controls. No authentication provider is selected here.
 
 | Screen | Monitor | Maintain/control |
 |---|---|---|
@@ -913,7 +918,7 @@ until every backend module is complete to build the operator experience.
 
 | Milestone | Deliverables | Acceptance gate |
 |---|---|---|
-| M0: Foundation review and contracts | Local Docker Supabase and ingestion baseline, remaining defaults, component and asset-rule contracts, capacity/archive decision, adapter fixtures | Local migrations and worker readiness verified, existing ingestion tests pass, and contracts preserve identity and account isolation |
+| M0: Foundation review and contracts | Local Docker PostgreSQL and ingestion baseline, remaining defaults, component and asset-rule contracts, capacity/archive decision, adapter fixtures | Local DDL initialization and worker readiness verified, existing ingestion tests pass, and contracts preserve identity and account isolation |
 | M1: Reproducible research slice | Immutable dataset export, long/short baseline strategy, simulator, short financing/margin scenarios, accounting, run registry, Auth/FastAPI, Next.js shell with MUI theme and Zustand stores, initial research screen | Repeated run matches pinned outputs; no future-data use; accounting/reversals match hand calculations; UI hydration and account-scoped state checks pass |
 | M2: Batch research and selection | Search spaces, bounded job scheduling, comparison UI, chronological validation, promotion records | 100-run benchmark measured; cancellation/retries do not corrupt results; one candidate has a complete, reviewable research record |
 | M3: Account state and operational controls | Alpaca read-only account/borrow/margin adapters, ledger/reconciliation, long/short risk and reservations, ownership, kill controls, account/risk UI | Ineligible shorts and margin breaches block opening risk; restart, external trades, stale snapshots and reservations reconcile; alert and halt drills pass |
@@ -981,7 +986,7 @@ Track research performance regressions separately from correctness checks.
 | Separate data, execution, and asset-rule interfaces | Supports mixed providers and future asset classes | Requires explicit capability, valuation, and lifecycle validation |
 | One strategy per account initially | Gives clear capital ownership and P&L | Uses more accounts; shared accounts require allocator and attribution work |
 | Next.js + MUI + Zustand with FastAPI | Confirmed UI stack; shared components, explicit client state, and Python control contracts | Operate the Next.js runtime; verify SSR/hydration and keep generated API types in sync |
-| Local Docker and Supabase first | Supports strategy validation with isolated data and services | Hosted GCP/Supabase rollout follows the production hold and later authorization |
+| Local Docker and PostgreSQL first | Supports strategy validation with isolated data and services | Hosted GCP/Supabase rollout follows the production hold and later authorization |
 
 Implementation should price additional infrastructure/data requirements against
 the chosen universe, retention, concurrency, and recovery needs.

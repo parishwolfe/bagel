@@ -221,7 +221,6 @@ tempCodeRunnerFile.py
 *.key
 *service-account*.json
 !*.tfvars.example
-supabase/.temp/
 
 # PyPI configuration file
 .pypirc

@@ -8,12 +8,11 @@ from typing import Annotated
 from uuid import UUID
 
 import typer
-import uvicorn
 from psycopg import Error, OperationalError
-from psycopg_pool import PoolTimeout
 from pydantic import TypeAdapter
+from sqlalchemy.exc import SQLAlchemyError
 
-from market.api.research import create_app
+from market.api.cli import serve as serve_api
 from market.backtesting.engine import CashOrSplitEvent
 from market.data.domain import TimeRange, parse_boundary
 from market.data.observability import configure_logging
@@ -31,12 +30,12 @@ log = logging.getLogger(__name__)
 def context() -> Iterator[tuple[ResearchSettings, Queue, Artifacts]]:
     try:
         settings = ResearchSettings()
-        with Queue(settings.database_url.get_secret_value()) as queue:
+        with Queue(settings.dsn()) as queue:
             yield settings, queue, Artifacts(settings.artifacts)
     except (ValueError, KeyError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
-    except (Error, PoolTimeout, OSError) as error:
+    except (Error, SQLAlchemyError, OSError) as error:
         typer.echo(f"Local research operation failed ({type(error).__name__}).", err=True)
         raise typer.Exit(1) from None
 
@@ -55,9 +54,7 @@ def fixture(sessions: Annotated[int, typer.Option(min=1, max=100)] = 3):
 
 @app.command()
 def export(
-    series: Annotated[
-        list[int], typer.Option(help="A local series ID. Repeat for each instrument.")
-    ],
+    series: Annotated[list[int], typer.Option(help="A local series ID. Repeat for each instrument.")],
     start: Annotated[str, typer.Option()],
     end: Annotated[str, typer.Option()],
     actions: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
@@ -65,12 +62,10 @@ def export(
     """Freeze regular-session bars already present in the local database."""
     with context() as (settings, queue, artifacts):
         events = (
-            TypeAdapter(tuple[CashOrSplitEvent, ...]).validate_json(actions.read_bytes())
-            if actions
-            else ()
+            TypeAdapter(tuple[CashOrSplitEvent, ...]).validate_json(actions.read_bytes()) if actions else ()
         )
         manifest = export_local(
-            settings.database_url.get_secret_value(),
+            settings.dsn(),
             artifacts,
             series,
             TimeRange(parse_boundary(start), parse_boundary(end)),
@@ -107,7 +102,7 @@ def work(drain: Annotated[bool, typer.Option(help="Exit when no runs are claimab
                     continue
                 if drain:
                     return
-            except (OperationalError, PoolTimeout) as error:
+            except (OperationalError, SQLAlchemyError) as error:
                 if drain:
                     raise
                 log.warning("research_db_retry", extra={"error_type": type(error).__name__})
@@ -119,5 +114,5 @@ def serve(
     host: Annotated[str, typer.Option()] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8001,
 ):
-    """Run the local FastAPI research interface."""
-    uvicorn.run(create_app(), host=host, port=port)
+    """Run the local API with its integrated offline research worker."""
+    serve_api(host=host, port=port)

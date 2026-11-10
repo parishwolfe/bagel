@@ -8,6 +8,7 @@ from datetime import timedelta
 import psycopg
 import typer
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from .capacity import load_watchlist
 from .config import Settings
@@ -35,7 +36,7 @@ def errors():
     except (ValueError, ProviderError, CapacityExceeded, HistoryDoesNotFit) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from None
-    except (psycopg.Error, OSError, RuntimeError) as exc:
+    except (psycopg.Error, SQLAlchemyError, OSError, RuntimeError) as exc:
         # libpq and network exceptions may contain DSNs. Never echo their raw messages.
         typer.echo(
             f"Operation failed: {type(exc).__name__}. Check configuration and service health.",
@@ -58,11 +59,7 @@ def historical_command(
     with errors():
         settings = settings_for(symbols)
         if force and not start and not settings.history_start:
-            start = (
-                (settings.eligible_end() - timedelta(days=settings.reconcile_days))
-                .date()
-                .isoformat()
-            )
+            start = (settings.eligible_end() - timedelta(days=settings.reconcile_days)).date().isoformat()
         window = settings.history_window(start, end)
         if dry_run:
             typer.echo(
@@ -176,9 +173,7 @@ def run(symbols: str | None = typer.Option(None)):
             try:
                 with PostgresStore(settings.database_url.get_secret_value()) as store:
                     restart = asyncio.run(
-                        run_worker(
-                            settings, store, provider, reload_settings=lambda: settings_for(symbols)
-                        )
+                        run_worker(settings, store, provider, reload_settings=lambda: settings_for(symbols))
                     )
             finally:
                 provider.close()
@@ -194,11 +189,7 @@ def watchlist(
         if settings.database_url is None:
             raise ValueError("Set DATABASE_URL to read or update the watchlist")
         with PostgresStore(settings.database_url.get_secret_value()) as store:
-            snapshot = (
-                store.set_watchlist(settings)
-                if symbols
-                else store.watchlist("alpaca:" + settings.feed)
-            )
+            snapshot = store.set_watchlist(settings) if symbols else store.watchlist("alpaca:" + settings.feed)
             typer.echo(
                 json.dumps(
                     {

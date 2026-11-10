@@ -54,7 +54,7 @@ def configure_logging(level: str) -> None:
     # Pool connection diagnostics may include raw libpq errors. Application retries
     # emit only safe error class names instead.
     logging.getLogger("psycopg").setLevel(logging.CRITICAL)
-    logging.getLogger("psycopg.pool").setLevel(logging.CRITICAL)
+    logging.getLogger("sqlalchemy").setLevel(logging.CRITICAL)
 
 
 @dataclass
@@ -78,33 +78,15 @@ class Health:
 class Metrics:
     def __init__(self):
         self.registry = CollectorRegistry()
-        self.connected = Gauge(
-            "bagel_stream_connected", "Authenticated stream", registry=self.registry
-        )
-        self.received = Counter(
-            "bagel_bars_received", "Stream observations", registry=self.registry
-        )
-        self.written = Counter(
-            "bagel_bars_written", "Committed observations", registry=self.registry
-        )
-        self.write_failures = Counter(
-            "bagel_write_failures", "Failed batches", registry=self.registry
-        )
-        self.reconnects = Counter(
-            "bagel_stream_reconnects", "Reconnect attempts", registry=self.registry
-        )
-        self.queue_depth = Gauge(
-            "bagel_queue_depth", "Buffered observations", registry=self.registry
-        )
-        self.lag = Gauge(
-            "bagel_ingestion_lag_seconds", "Last persisted bar age", registry=self.registry
-        )
-        self.repair_backlog = Gauge(
-            "bagel_repair_backlog_seconds", "Unrepaired time", registry=self.registry
-        )
-        self.pending = Gauge(
-            "bagel_pending_ranges", "Durable pending ranges", registry=self.registry
-        )
+        self.connected = Gauge("bagel_stream_connected", "Authenticated stream", registry=self.registry)
+        self.received = Counter("bagel_bars_received", "Stream observations", registry=self.registry)
+        self.written = Counter("bagel_bars_written", "Committed observations", registry=self.registry)
+        self.write_failures = Counter("bagel_write_failures", "Failed batches", registry=self.registry)
+        self.reconnects = Counter("bagel_stream_reconnects", "Reconnect attempts", registry=self.registry)
+        self.queue_depth = Gauge("bagel_queue_depth", "Buffered observations", registry=self.registry)
+        self.lag = Gauge("bagel_ingestion_lag_seconds", "Last persisted bar age", registry=self.registry)
+        self.repair_backlog = Gauge("bagel_repair_backlog_seconds", "Unrepaired time", registry=self.registry)
+        self.pending = Gauge("bagel_pending_ranges", "Durable pending ranges", registry=self.registry)
         self.last_reconcile = Gauge(
             "bagel_last_reconciliation_timestamp_seconds",
             "Last successful reconciliation",

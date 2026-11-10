@@ -20,7 +20,7 @@ jobs:
       - run: poetry run ruff check .
       - run: poetry run ruff format --check .
       - run: poetry run pyright
-      - run: docker compose config --quiet
+      - run: docker compose config --no-interpolate --no-env-resolution --quiet
       - run: docker build -t bagel-market-data:ci .
       - run: docker run --rm bagel-market-data:ci backfill --dry-run
   terraform:

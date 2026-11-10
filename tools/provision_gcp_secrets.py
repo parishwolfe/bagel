@@ -37,9 +37,7 @@ def provision(project: str, pooler: str, project_ref: str) -> None:
         if not flags or any(flags):
             raise RuntimeError("Existing worker role has elevated privileges")
         conn.execute(
-            sql.SQL("alter role {} with login password {}").format(
-                sql.Identifier(role), sql.Literal(verifier)
-            )
+            sql.SQL("alter role {} with login password {}").format(sql.Identifier(role), sql.Literal(verifier))
         )
         conn.execute(sql.SQL("grant bagel_ingester to {}").format(sql.Identifier(role)))
     dsn = make_conninfo(
@@ -54,10 +52,8 @@ def provision(project: str, pooler: str, project_ref: str) -> None:
     )
     with psycopg.connect(dsn) as conn:
         assert conn.pgconn.ssl_in_use
-        assert conn.execute("select count(*) from ingestion.watchlists").fetchone()
-        privilege = conn.execute(
-            "select has_schema_privilege(current_user,'public','CREATE')"
-        ).fetchone()
+        assert conn.execute("select count(*) from public.watchlists").fetchone()
+        privilege = conn.execute("select has_schema_privilege(current_user,'public','CREATE')").fetchone()
         assert privilege and not privilege[0]
     values = {
         "bagel-alpaca-api-key": settings.alpaca_api_key.get_secret_value(),
@@ -102,9 +98,7 @@ def main() -> None:
         provision(args.project, args.pooler_host, args.project_ref)
     except Exception as exc:
         # Never emit libpq errors, local configuration values, or subprocess output.
-        raise SystemExit(
-            f"Provisioning failed ({type(exc).__name__}); details suppressed"
-        ) from None
+        raise SystemExit(f"Provisioning failed ({type(exc).__name__}); details suppressed") from None
 
 
 if __name__ == "__main__":
