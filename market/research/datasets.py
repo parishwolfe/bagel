@@ -3,16 +3,17 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 
-import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
-from psycopg.rows import dict_row
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from sqlalchemy import Text, cast, select
+from sqlalchemy.orm import Session
 
+from market import models as m
 from market.backtesting.engine import CashOrSplitEvent
 from market.data.domain import MINUTE, NEW_YORK, Bar, TimeRange
-from market.database import require_local_database
-from market.research.artifacts import Artifacts, digest_json
+from market.database import database_engine, require_local_database
+from market.research.artifacts import Artifacts, canonical_json, digest_json
 
 Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 BATCH_ROWS = 16_384
@@ -38,7 +39,7 @@ class Series(BaseModel):
 class DatasetManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    format: Literal["equity-minute-parquet-v1"] = "equity-minute-parquet-v1"
+    format: Literal["equity-minute-parquet-v1", "equity-minute-parquet-v2"] = "equity-minute-parquet-v1"
     availability: Literal["synthetic", "revised_history"]
     sha256: Digest
     series: tuple[Series, ...]
@@ -49,10 +50,17 @@ class DatasetManifest(BaseModel):
     adjustment: Literal["raw"] = "raw"
     session: Literal["regular"] = "regular"
     actions: tuple[CashOrSplitEvent, ...] = ()
+    revision_manifest_sha256: Digest | None = None
+    legacy_unarchived_rows: int = Field(default=0, ge=0)
 
     @property
     def id(self) -> str:
-        return digest_json(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if self.format == "equity-minute-parquet-v1":
+            # Preserve every pre-existing dataset identity after adding v2 metadata.
+            payload.pop("revision_manifest_sha256")
+            payload.pop("legacy_unarchived_rows")
+        return digest_json(payload)
 
 
 def freeze(
@@ -61,6 +69,8 @@ def freeze(
     series: tuple[Series, ...],
     availability: Literal["synthetic", "revised_history"],
     actions: tuple[CashOrSplitEvent, ...] = (),
+    *,
+    row_budget: int | None = None,
 ) -> DatasetManifest:
     allowed = {entry.instrument for entry in series}
     if not allowed or len(allowed) != len(series):
@@ -82,6 +92,8 @@ def freeze(
                 previous = key
                 seen.add(bar.symbol)
                 rows += 1
+                if row_budget is not None and rows > row_budget:
+                    raise ValueError("Dataset exceeds its requested row resource budget")
                 batch.append({field: getattr(bar, field) for field in SCHEMA.names})
                 if len(batch) == BATCH_ROWS:
                     writer.write_table(pa.Table.from_pylist(batch, schema=SCHEMA))
@@ -103,6 +115,10 @@ def freeze(
 
 
 def read_bars(artifacts: Artifacts, manifest: DatasetManifest) -> Iterator[Bar]:
+    if manifest.format == "equity-minute-parquet-v2":
+        if manifest.revision_manifest_sha256 is None:
+            raise ValueError("Dataset revision manifest is missing")
+        artifacts.read(manifest.revision_manifest_sha256)
     with pq.ParquetFile(artifacts.read(manifest.sha256)) as parquet:
         if parquet.schema_arrow != SCHEMA or parquet.metadata.num_rows != manifest.rows:
             raise ValueError("Parquet schema or row count does not match the manifest")
@@ -117,43 +133,101 @@ def export_local(
     series_ids: list[int],
     window: TimeRange,
     actions: tuple[CashOrSplitEvent, ...] = (),
+    *,
+    row_budget: int | None = None,
 ) -> DatasetManifest:
     require_local_database(dsn)
-    if not series_ids or len(series_ids) > 100 or len(set(series_ids)) != len(series_ids):
-        raise ValueError("Supply 1–100 unique series IDs")
-    with psycopg.connect(dsn, connect_timeout=5) as conn:
-        conn.execute("set transaction isolation level repeatable read read only")
-        metadata = conn.execute(
-            """select s.id as series_id, s.instrument_id::text as instrument, src.code as source,
-                      s.feed
-                 from public.series s
-                 join public.sources src on src.id = s.source_id
-                 join public.instruments i on i.id = s.instrument_id
-                where s.id = any(%s) and s.interval_seconds = 60 and s.currency = 'USD'
-                  and s.adjustment = 'raw' and i.asset_class = 'us_equity'""",
-            (series_ids,),
-        ).fetchall()
-        if len(metadata) != len(series_ids):
-            raise ValueError("Every selected series must be raw USD one-minute equity data")
-        with conn.cursor(name="research_export", row_factory=dict_row) as rows:
-            rows.execute(
-                """select s.instrument_id::text as symbol, b.bar_start as timestamp,
-                          b.open, b.high, b.low, b.close, b.volume
-                     from public.bars b join public.series s on s.id = b.series_id
-                    where b.series_id = any(%s) and b.bar_start >= %s and b.bar_start < %s
-                      and b.session = 'regular'
-                    order by b.bar_start, s.instrument_id""",
-                (series_ids, window.start, window.end),
-            )
-            return freeze(
-                artifacts,
-                (Bar(**row, vwap=None, trade_count=None) for row in rows),
-                tuple(
-                    Series(series_id=row[0], instrument=row[1], source=row[2], feed=row[3]) for row in metadata
-                ),
-                "revised_history",
-                actions,
-            )
+    if not series_ids or len(set(series_ids)) != len(series_ids):
+        raise ValueError("Supply a nonempty set of unique series IDs")
+    engine = database_engine(dsn, application_name="bagel-export", pool_size=1, timeout=5)
+    try:
+        with (
+            engine.connect().execution_options(
+                isolation_level="REPEATABLE READ", postgresql_readonly=True
+            ) as connection,
+            Session(bind=connection) as session,
+            session.begin(),
+        ):
+            metadata = session.execute(
+                select(m.Series.id, cast(m.Series.instrument_id, Text), m.Source.code, m.Series.feed)
+                .join(m.Source, m.Source.id == m.Series.source_id)
+                .join(m.Instrument, m.Instrument.id == m.Series.instrument_id)
+                .where(
+                    m.Series.id.in_(series_ids),
+                    m.Series.interval_seconds == 60,
+                    m.Series.currency == "USD",
+                    m.Series.adjustment == "raw",
+                    m.Instrument.asset_class == "us_equity",
+                )
+            ).all()
+            if len(metadata) != len(series_ids):
+                raise ValueError("Every selected series must be raw USD one-minute equity data")
+            with session.execute(
+                select(
+                    cast(m.Series.instrument_id, Text).label("symbol"),
+                    m.Bar.bar_start.label("timestamp"),
+                    m.Bar.open,
+                    m.Bar.high,
+                    m.Bar.low,
+                    m.Bar.close,
+                    m.Bar.volume,
+                    m.Bar.series_id,
+                    m.Bar.revision_id,
+                )
+                .join(m.Series, m.Series.id == m.Bar.series_id)
+                .where(
+                    m.Bar.series_id.in_(series_ids),
+                    m.Bar.bar_start >= window.start,
+                    m.Bar.bar_start < window.end,
+                    m.Bar.session == "regular",
+                )
+                .order_by(m.Bar.bar_start, m.Series.instrument_id)
+                .execution_options(yield_per=BATCH_ROWS)
+            ) as result:
+                with artifacts.temporary() as reference_path:
+                    legacy_rows = 0
+                    with reference_path.open("wb") as references:
+
+                        def bars() -> Iterator[Bar]:
+                            nonlocal legacy_rows
+                            for mapping in result.mappings():
+                                row = dict(mapping)
+                                revision = row.pop("revision_id")
+                                series_id = row.pop("series_id")
+                                legacy_rows += int(revision is None)
+                                references.write(
+                                    canonical_json(
+                                        {
+                                            "series_id": series_id,
+                                            "bar_start": row["timestamp"],
+                                            "revision_id": revision,
+                                        }
+                                    )
+                                    + b"\n"
+                                )
+                                yield Bar(**row, vwap=None, trade_count=None)
+
+                        manifest = freeze(
+                            artifacts,
+                            bars(),
+                            tuple(
+                                Series(series_id=row[0], instrument=row[1], source=row[2], feed=row[3])
+                                for row in metadata
+                            ),
+                            "revised_history",
+                            actions,
+                            row_budget=row_budget,
+                        )
+                    reference_digest = artifacts.publish(reference_path)
+                return manifest.model_copy(
+                    update={
+                        "format": "equity-minute-parquet-v2",
+                        "revision_manifest_sha256": reference_digest,
+                        "legacy_unarchived_rows": legacy_rows,
+                    }
+                )
+    finally:
+        engine.dispose()
 
 
 def synthetic_fixture(artifacts: Artifacts, sessions: int) -> DatasetManifest:

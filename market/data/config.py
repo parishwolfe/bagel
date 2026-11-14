@@ -26,6 +26,14 @@ class Settings(DatabaseSettings):
         validation_alias="BAGEL_SYMBOLS",
     )
     feed: Literal["iex", "sip"] = Field(default="iex", validation_alias="BAGEL_FEED")
+    integration_enabled: bool = Field(default=False, validation_alias="BAGEL_INGESTION_ENABLED")
+    data_relay: Literal["http://execution:8011", "http://relay:8011"] | None = Field(
+        default=None, validation_alias="BAGEL_DATA_RELAY"
+    )
+    relay_key: SecretStr | None = Field(default=None, validation_alias="BAGEL_API_KEY", repr=False)
+    subscription_plan: Literal["basic", "plus"] = Field(default="basic", validation_alias="BAGEL_ALPACA_PLAN")
+    stream_endpoint: str | None = Field(default=None, validation_alias="BAGEL_ALPACA_STREAM_ENDPOINT")
+    history_symbol_batch: int = Field(default=64, ge=1, le=1000, validation_alias="BAGEL_HISTORY_SYMBOL_BATCH")
     alpaca_api_key: SecretStr | None = Field(
         default=None, validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID")
     )
@@ -72,6 +80,8 @@ class Settings(DatabaseSettings):
     def parse_symbols(cls, value):
         symbols = value.split(",") if isinstance(value, str) else value
         result = list(dict.fromkeys(str(s).strip().upper() for s in symbols if str(s).strip()))
+        if result == ["*"]:
+            return result
         if not result or any(not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,19}", s) for s in result):
             raise ValueError("Use a nonempty comma-separated US equity symbol list")
         return result
@@ -90,11 +100,21 @@ class Settings(DatabaseSettings):
             raise ValueError("Collection window must not cross midnight")
         if self.window_open.tzinfo or self.window_close.tzinfo:
             raise ValueError("Collection times are local America/New_York wall times")
-        if self.feed == "iex" and len(self.symbols) > 30:
-            raise ValueError("IEX Basic configuration is limited to 30 symbols")
+        if self.subscription_plan == "basic" and (self.symbols == ["*"] or len(self.symbols) > 30):
+            raise ValueError("Alpaca Basic streaming entitlement requires at most 30 explicit symbols")
+        expected_endpoint = f"wss://stream.data.alpaca.markets/v2/{self.feed}"
+        if self.stream_endpoint not in (None, expected_endpoint):
+            raise ValueError("Stream endpoint must match the configured official Alpaca stock feed")
+        self.stream_endpoint = expected_endpoint
         return self
 
     def missing_credentials(self) -> list[str]:
+        if self.data_relay:
+            return [
+                name
+                for name, value in (("BAGEL_API_KEY", self.relay_key), ("DATABASE_URL", self.database_url))
+                if value is None or not value.get_secret_value().strip()
+            ]
         return [
             name
             for name, value in (

@@ -40,6 +40,14 @@ def configure_logging(level: str) -> None:
                 "connected",
                 "session_active",
                 "database_ok",
+                "event_id",
+                "stream_id",
+                "signal_id",
+                "strategy_id",
+                "provider",
+                "inputs",
+                "queue_depth",
+                "lag",
             ):
                 if hasattr(record, name):
                     payload[name] = getattr(record, name)
@@ -60,7 +68,7 @@ def configure_logging(level: str) -> None:
 @dataclass
 class Health:
     tick: float = field(default_factory=time.monotonic)
-    database_ok: bool = False
+    transport_ok: bool = False
     connected: bool = False
     session_active: bool = False
     stopping: bool = False
@@ -72,7 +80,7 @@ class Health:
 
     @property
     def ready(self) -> bool:
-        return self.live and self.database_ok and (not self.session_active or self.connected)
+        return self.live and self.transport_ok and (not self.session_active or self.connected)
 
 
 class Metrics:
@@ -80,11 +88,15 @@ class Metrics:
         self.registry = CollectorRegistry()
         self.connected = Gauge("bagel_stream_connected", "Authenticated stream", registry=self.registry)
         self.received = Counter("bagel_bars_received", "Stream observations", registry=self.registry)
-        self.written = Counter("bagel_bars_written", "Committed observations", registry=self.registry)
-        self.write_failures = Counter("bagel_write_failures", "Failed batches", registry=self.registry)
+        self.published = Counter(
+            "bagel_bars_published", "Redis-published observations", registry=self.registry
+        )
+        self.publish_failures = Counter(
+            "bagel_publish_failures", "Redis publish failures", registry=self.registry
+        )
         self.reconnects = Counter("bagel_stream_reconnects", "Reconnect attempts", registry=self.registry)
         self.queue_depth = Gauge("bagel_queue_depth", "Buffered observations", registry=self.registry)
-        self.lag = Gauge("bagel_ingestion_lag_seconds", "Last persisted bar age", registry=self.registry)
+        self.lag = Gauge("bagel_ingestion_lag_seconds", "Last Redis-published bar age", registry=self.registry)
         self.repair_backlog = Gauge("bagel_repair_backlog_seconds", "Unrepaired time", registry=self.registry)
         self.pending = Gauge("bagel_pending_ranges", "Durable pending ranges", registry=self.registry)
         self.last_reconcile = Gauge(

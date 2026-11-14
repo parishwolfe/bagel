@@ -2,12 +2,14 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 
 from psycopg import OperationalError
 from sqlalchemy.exc import OperationalError as PoolOperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from market.backtesting.engine import BacktestSpec, run_backtest
+from market.portfolio.ledger import Fill
 from market.research.artifacts import Artifacts, canonical_json
 from market.research.datasets import read_bars
 from market.research.queue import LEASE_SECONDS, Queue
@@ -37,7 +39,22 @@ def work_once(queue: Queue, artifacts: Artifacts, stopping: Callable[[], bool] =
     try:
         manifest = queue.dataset(claim.dataset_id)
         spec = BacktestSpec.model_validate(claim.spec)
-        results = run_backtest(read_bars(artifacts, manifest), spec, manifest.actions, checkpoint)
+        if not spec.instruments:
+            spec = spec.model_copy(
+                update={"instruments": tuple(series.instrument for series in manifest.series)}
+            )
+        with artifacts.temporary() as fill_path:
+            with fill_path.open("wb") as output:
+
+                def record_fill(fill: Fill) -> None:
+                    output.write(canonical_json(asdict(fill)) + b"\n")
+
+                results = run_backtest(
+                    read_bars(artifacts, manifest), spec, manifest.actions, checkpoint, record_fill
+                )
+            checkpoint(force=True)
+            results["fill_log_sha256"] = artifacts.publish(fill_path)
+            results["fill_log_format"] = "bagel-fills-jsonl-v1"
         results["summary"]["dataset_availability"] = manifest.availability
         checkpoint(force=True)
         digest = artifacts.write_json(results)

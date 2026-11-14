@@ -1,71 +1,35 @@
-"""PostgreSQL repository. Writes and coverage checkpoints share a transaction."""
+"""SQLAlchemy ORM market-data repository; migrations alone own schema changes."""
 
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-import psycopg
-from psycopg import Connection
+from sqlalchemy import func, select, tuple_, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
-from market.database import database_connection, database_engine
+from market import models as m
+from market.database import database_engine, database_session
+from market.events.journal import archive
 
 from .config import Settings
 from .domain import Instrument, Observation, TimeRange
 from .watchlist import Watchlist, WatchlistChanged, configuration_signature
 
-UPSERT_BAR = """
-insert into public.bars (
-    series_id, bar_start, open, high, low, close, volume, vwap, trade_count,
-    session, origin, observed_at, received_at
-) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-on conflict (series_id, bar_start) do update set
-    open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
-    volume=excluded.volume, vwap=excluded.vwap, trade_count=excluded.trade_count,
-    session=excluded.session, origin=excluded.origin, observed_at=excluded.observed_at,
-    received_at=excluded.received_at, ingested_at=clock_timestamp()
-where (excluded.quality_rank, excluded.observed_at)
-    > (bars.quality_rank, bars.observed_at)
-"""
-
-COPY_UPSERT = """
-insert into public.bars (
-    series_id,bar_start,open,high,low,close,volume,vwap,trade_count,
-    session,origin,observed_at,received_at
-)
-select distinct on (series_id,bar_start)
-    series_id,bar_start,open,high,low,close,volume,vwap,trade_count,
-    session,origin,observed_at,received_at
-from pg_temp.bagel_bar_stage
-order by series_id,bar_start,
-    case origin when 'historical' then 30 when 'live_updated' then 20 else 10 end desc,
-    observed_at desc,received_at desc
-on conflict (series_id,bar_start) do update set
-    open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
-    volume=excluded.volume,vwap=excluded.vwap,trade_count=excluded.trade_count,
-    session=excluded.session,origin=excluded.origin,observed_at=excluded.observed_at,
-    received_at=excluded.received_at,ingested_at=clock_timestamp()
-where (excluded.quality_rank,excluded.observed_at) > (bars.quality_rank,bars.observed_at)
-"""
-
-
-def _scalar(cursor):
-    row = cursor.fetchone()
-    if row is None:
-        raise RuntimeError("Expected a database result row")
-    return row[0]
-
 
 class StreamAlreadyOwned(RuntimeError):
-    """Another healthy revision still owns this feed during a rolling release."""
+    pass
 
 
 class PostgresStore:
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, write_guard: Callable[[Session], None] | None = None):
         self.dsn = dsn
         self.engine = database_engine(dsn, application_name="bagel-market-data", pool_size=4, timeout=10)
         self._partitions: set[tuple[int, int]] = set()
+        self.write_guard = write_guard
+        self._series_cache: dict[tuple[str, str, str, str], int] = {}
 
     def __enter__(self):
         self.ping()
@@ -75,8 +39,8 @@ class PostgresStore:
         self.engine.dispose()
 
     def ping(self) -> None:
-        with database_connection(self.engine) as conn:
-            conn.execute("select 1 from public.sources limit 1")
+        with database_session(self.engine) as session:
+            session.scalar(select(m.Source.id).limit(1))
 
     def resolve_series(
         self,
@@ -85,370 +49,504 @@ class PostgresStore:
         source: str = "alpaca",
         canonical_instruments: dict[str, UUID] | None = None,
     ) -> dict[str, int]:
+        cached = {
+            i.symbol: self._series_cache[(source, feed, i.provider_id, i.symbol)]
+            for i in instruments
+            if (source, feed, i.provider_id, i.symbol) in self._series_cache
+        }
+        if len(cached) == len(instruments):
+            return cached
         result = {}
-        with database_connection(self.engine) as conn:
-            # Serialize reference-data changes; never merge instruments by ticker alone.
-            conn.execute("select pg_advisory_xact_lock(74021802)")
-            source_id = _scalar(
-                conn.execute(
-                    "insert into public.sources(code) values (%s) "
-                    "on conflict (code) do update set code=excluded.code returning id",
-                    (source,),
-                )
+        with database_session(self.engine) as session:
+            session.scalar(select(func.pg_advisory_xact_lock(74021802)))
+            statement = insert(m.Source).values(code=source)
+            source_id = session.scalar(
+                statement.on_conflict_do_update(
+                    index_elements=[m.Source.code], set_={"code": statement.excluded.code}
+                ).returning(m.Source.id)
             )
             for instrument in instruments:
-                row = conn.execute(
-                    "select instrument_id, symbol from public.instrument_mappings "
-                    "where source_id=%s and provider_instrument_id=%s and valid_to is null",
-                    (source_id, instrument.provider_id),
-                ).fetchone()
-                if row:
-                    instrument_id, old_symbol = row
-                    if old_symbol != instrument.symbol:
-                        conn.execute(
-                            "update public.instrument_mappings set valid_to=clock_timestamp() "
-                            "where source_id=%s and provider_instrument_id=%s and valid_to is null",
-                            (source_id, instrument.provider_id),
+                current = session.execute(
+                    select(m.InstrumentMapping.instrument_id, m.InstrumentMapping.symbol).where(
+                        m.InstrumentMapping.source_id == source_id,
+                        m.InstrumentMapping.provider_instrument_id == instrument.provider_id,
+                        m.InstrumentMapping.valid_to.is_(None),
+                    )
+                ).first()
+                if current is not None:
+                    instrument_id = current.instrument_id
+                    if current.symbol == instrument.symbol:
+                        need_mapping = False
+                    else:
+                        session.execute(
+                            update(m.InstrumentMapping)
+                            .where(
+                                m.InstrumentMapping.source_id == source_id,
+                                m.InstrumentMapping.provider_instrument_id == instrument.provider_id,
+                                m.InstrumentMapping.valid_to.is_(None),
+                            )
+                            .values(valid_to=func.clock_timestamp())
                         )
-                        conn.execute(
-                            "insert into public.instrument_mappings "
-                            "(source_id,provider_instrument_id,instrument_id,symbol,valid_from) "
-                            "values (%s,%s,%s,%s,clock_timestamp())",
-                            (source_id, instrument.provider_id, instrument_id, instrument.symbol),
-                        )
+                        need_mapping = True
                 else:
-                    # A reused symbol ends its old mapping; it must not inherit old bars.
-                    conn.execute(
-                        "update public.instrument_mappings set valid_to=clock_timestamp() "
-                        "where source_id=%s and symbol=%s and valid_to is null",
-                        (source_id, instrument.symbol),
+                    session.execute(
+                        update(m.InstrumentMapping)
+                        .where(
+                            m.InstrumentMapping.source_id == source_id,
+                            m.InstrumentMapping.symbol == instrument.symbol,
+                            m.InstrumentMapping.valid_to.is_(None),
+                        )
+                        .values(valid_to=func.clock_timestamp())
                     )
                     instrument_id = (canonical_instruments or {}).get(instrument.symbol)
                     if instrument_id is None:
-                        instrument_id = _scalar(
-                            conn.execute(
-                                "insert into public.instruments(name,asset_class,currency) "
-                                "values (%s,%s,%s) returning id",
-                                (instrument.name, instrument.asset_class, instrument.currency),
+                        instrument_id = session.scalar(
+                            insert(m.Instrument)
+                            .values(
+                                name=instrument.name,
+                                asset_class=instrument.asset_class,
+                                currency=instrument.currency,
                             )
+                            .returning(m.Instrument.id)
                         )
-                    conn.execute(
-                        "insert into public.instrument_mappings "
-                        "(source_id,provider_instrument_id,instrument_id,symbol) "
-                        "values (%s,%s,%s,%s)",
-                        (source_id, instrument.provider_id, instrument_id, instrument.symbol),
+                    need_mapping = True
+                if need_mapping:
+                    session.execute(
+                        insert(m.InstrumentMapping).values(
+                            source_id=source_id,
+                            provider_instrument_id=instrument.provider_id,
+                            instrument_id=instrument_id,
+                            symbol=instrument.symbol,
+                            valid_from=func.clock_timestamp(),
+                        )
                     )
-                result[instrument.symbol] = _scalar(
-                    conn.execute(
-                        "insert into public.series "
-                        "(source_id,instrument_id,feed,interval_seconds,currency,adjustment) "
-                        "values (%s,%s,%s,60,%s,'raw') on conflict "
-                        "(source_id,instrument_id,feed,interval_seconds,currency,adjustment) "
-                        "do update set feed=excluded.feed returning id",
-                        (source_id, instrument_id, feed, instrument.currency),
-                    )
+                statement = insert(m.Series).values(
+                    source_id=source_id,
+                    instrument_id=instrument_id,
+                    feed=feed,
+                    interval_seconds=60,
+                    currency=instrument.currency,
+                    adjustment="raw",
                 )
+                identity = session.scalar(
+                    statement.on_conflict_do_update(
+                        index_elements=[
+                            m.Series.source_id,
+                            m.Series.instrument_id,
+                            m.Series.feed,
+                            m.Series.interval_seconds,
+                            m.Series.currency,
+                            m.Series.adjustment,
+                        ],
+                        set_={"feed": statement.excluded.feed},
+                    ).returning(m.Series.id)
+                )
+                assert identity is not None
+                result[instrument.symbol] = identity
+        self._series_cache.update(
+            {(source, feed, i.provider_id, i.symbol): result[i.symbol] for i in instruments}
+        )
         return result
 
     def start_run(self, mode: str, symbols: Sequence[str], window: TimeRange) -> UUID:
-        run_id = uuid4()
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "insert into public.ingestion_runs(id,mode,symbols,requested_start,requested_end) "
-                "values (%s,%s,%s,%s,%s)",
-                (run_id, mode, list(symbols), window.start, window.end),
+        identity = uuid4()
+        with database_session(self.engine) as session:
+            session.add(
+                m.IngestionRun(
+                    id=identity,
+                    mode=mode,
+                    symbols=list(symbols),
+                    requested_start=window.start,
+                    requested_end=window.end,
+                )
             )
-        return run_id
+        return identity
 
     def finish_run(self, run_id: UUID, error: str | None = None) -> None:
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "update public.ingestion_runs set status=%s,ended_at=clock_timestamp(),error_code=%s "
-                "where id=%s",
-                ("failed" if error else "complete", error, run_id),
+        with database_session(self.engine) as session:
+            session.execute(
+                update(m.IngestionRun)
+                .where(m.IngestionRun.id == run_id)
+                .values(
+                    status="failed" if error else "complete", ended_at=func.clock_timestamp(), error_code=error
+                )
             )
 
     def is_complete(self, series_ids: Sequence[int], window: TimeRange) -> bool:
-        with database_connection(self.engine) as conn:
-            count = _scalar(
-                conn.execute(
-                    "select count(*) from public.ranges where series_id=any(%s) "
-                    "and range_start=%s and range_end=%s and status='complete'",
-                    (list(series_ids), window.start, window.end),
+        with database_session(self.engine) as session:
+            count = session.scalar(
+                select(func.count())
+                .select_from(m.CoverageRange)
+                .where(
+                    m.CoverageRange.series_id.in_(series_ids),
+                    m.CoverageRange.range_start == window.start,
+                    m.CoverageRange.range_end == window.end,
+                    m.CoverageRange.status == "complete",
                 )
             )
         return count == len(series_ids)
 
     def incomplete_series(self, series: dict[str, int], window: TimeRange) -> dict[str, int]:
-        with database_connection(self.engine) as conn:
-            completed = {
-                row[0]
-                for row in conn.execute(
-                    "select series_id from public.ranges where series_id=any(%s) "
-                    "and range_start=%s and range_end=%s and status='complete'",
-                    (list(series.values()), window.start, window.end),
-                ).fetchall()
-            }
+        with database_session(self.engine) as session:
+            completed = set(
+                session.scalars(
+                    select(m.CoverageRange.series_id).where(
+                        m.CoverageRange.series_id.in_(series.values()),
+                        m.CoverageRange.range_start == window.start,
+                        m.CoverageRange.range_end == window.end,
+                        m.CoverageRange.status == "complete",
+                    )
+                )
+            )
         return {symbol: sid for symbol, sid in series.items() if sid not in completed}
 
     def completed_ranges(self, series_ids: Sequence[int], window: TimeRange) -> set[tuple]:
-        with database_connection(self.engine) as conn:
-            return set(
-                conn.execute(
-                    "select series_id,range_start,range_end from public.ranges "
-                    "where series_id=any(%s) and status='complete' and range_start >= %s "
-                    "and range_end <= %s",
-                    (list(series_ids), window.start, window.end),
-                ).fetchall()
-            )
+        with database_session(self.engine) as session:
+            return {
+                tuple(row)
+                for row in session.execute(
+                    select(
+                        m.CoverageRange.series_id, m.CoverageRange.range_start, m.CoverageRange.range_end
+                    ).where(
+                        m.CoverageRange.series_id.in_(series_ids),
+                        m.CoverageRange.status == "complete",
+                        m.CoverageRange.range_start >= window.start,
+                        m.CoverageRange.range_end <= window.end,
+                    )
+                )
+            }
 
     def mark_pending(self, run_id: UUID, series_ids: Sequence[int], window: TimeRange) -> None:
-        with database_connection(self.engine) as conn, conn.cursor() as cur:
-            cur.executemany(
-                "insert into public.ranges(series_id,range_start,range_end,run_id) "
-                "values (%s,%s,%s,%s) on conflict (series_id,range_start,range_end) "
-                "do nothing",
-                [(sid, window.start, window.end, run_id) for sid in series_ids],
+        if not series_ids:
+            return
+        with database_session(self.engine) as session:
+            session.execute(
+                insert(m.CoverageRange)
+                .values(
+                    [
+                        dict(series_id=sid, range_start=window.start, range_end=window.end, run_id=run_id)
+                        for sid in series_ids
+                    ]
+                )
+                .on_conflict_do_nothing()
             )
 
-    def _write(self, conn: Connection, series: dict[str, int], observations: Sequence[Observation]) -> None:
-        conn.execute("select pg_advisory_xact_lock_shared(74021803)")
-        floors = dict(
-            conn.execute(
-                "select s.id,w.history_start from public.series s "
-                "join public.sources src on src.id=s.source_id "
-                "join public.watchlists w on w.stream_key=src.code || ':' || s.feed "
-                "where s.id=any(%s) and w.history_start is not null",
-                (list(series.values()),),
-            ).fetchall()
-        )
+    def _write(
+        self,
+        session: Session,
+        series: dict[str, int],
+        observations: Sequence[Observation],
+        envelopes: list[dict] | None = None,
+    ) -> None:
+        if self.write_guard:
+            self.write_guard(session)
+        session.scalar(select(func.pg_advisory_xact_lock_shared(74021803)))
+        floor_rows = session.execute(
+            select(m.Series.id, m.Watchlist.history_start)
+            .join(m.Source, m.Source.id == m.Series.source_id)
+            .join(m.Watchlist, m.Watchlist.stream_key == m.Source.code + ":" + m.Series.feed)
+            .where(m.Series.id.in_(series.values()), m.Watchlist.history_start.is_not(None))
+        ).all()
+        floors = {sid: floor for sid, floor in floor_rows if floor is not None}
         if any(
             o.bar.timestamp < floors[series[o.bar.symbol]]
             for o in observations
             if series[o.bar.symbol] in floors
         ):
             raise WatchlistChanged("A stale writer attempted to write before the retained history floor")
-        months = {(o.bar.timestamp.year, o.bar.timestamp.month) for o in observations}
-        for year, month in months - self._partitions:
+        for year, month in {
+            (o.bar.timestamp.year, o.bar.timestamp.month) for o in observations
+        } - self._partitions:
             start = datetime(year, month, 1, tzinfo=UTC)
-            conn.execute("select public.ensure_bar_partitions(%s,%s)", (start, start + timedelta(days=32)))
-        if observations:
-            with conn.cursor() as cur:
-                rows = [
-                    (
-                        series[o.bar.symbol],
-                        o.bar.timestamp,
-                        o.bar.open,
-                        o.bar.high,
-                        o.bar.low,
-                        o.bar.close,
-                        o.bar.volume,
-                        o.bar.vwap,
-                        o.bar.trade_count,
-                        o.session,
-                        o.origin.value,
-                        o.observed_at,
-                        o.received_at,
-                    )
-                    for o in observations
-                ]
-                if len(rows) < 100:
-                    cur.executemany(UPSERT_BAR, rows)
-                else:
-                    cur.execute(
-                        "create temp table if not exists bagel_bar_stage "
-                        "(like public.bars including defaults) on commit delete rows"
-                    )
-                    with cur.copy(
-                        "copy pg_temp.bagel_bar_stage ("
-                        "series_id,bar_start,open,high,low,close,volume,vwap,trade_count,"
-                        "session,origin,observed_at,received_at) from stdin"
-                    ) as copy:
-                        for row in rows:
-                            copy.write_row(row)
-                    cur.execute(COPY_UPSERT)
-        # Do not cache partition creation until the surrounding transaction has committed.
+            session.scalar(select(func.public.ensure_bar_partitions(start, start + timedelta(days=32))))
+        if not observations:
+            return
+        revisions = archive(session, series, observations, envelopes=envelopes)
+        # A PostgreSQL upsert cannot affect one key twice in a statement.
+        latest = {}
+        rank = {"historical": 30, "live_updated": 20, "live": 10}
+        for observation, revision in zip(observations, revisions, strict=True):
+            bar = observation.bar
+            key = (series[bar.symbol], bar.timestamp)
+            priority = (rank[observation.origin.value], observation.observed_at, observation.received_at)
+            if key in latest and latest[key][0] >= priority:
+                continue
+            latest[key] = (
+                priority,
+                dict(
+                    series_id=key[0],
+                    bar_start=key[1],
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    vwap=bar.vwap,
+                    trade_count=bar.trade_count,
+                    session=observation.session,
+                    origin=observation.origin.value,
+                    observed_at=observation.observed_at,
+                    received_at=observation.received_at,
+                    revision_id=revision,
+                ),
+            )
+        rows = [entry[1] for entry in latest.values()]
+        for begin in range(0, len(rows), 500):
+            statement = insert(m.Bar).values(rows[begin : begin + 500])
+            columns = (
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "vwap",
+                "trade_count",
+                "session",
+                "origin",
+                "observed_at",
+                "received_at",
+                "revision_id",
+            )
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[m.Bar.series_id, m.Bar.bar_start],
+                    set_={
+                        **{name: getattr(statement.excluded, name) for name in columns},
+                        "ingested_at": func.clock_timestamp(),
+                    },
+                    where=tuple_(statement.excluded.quality_rank, statement.excluded.observed_at)
+                    > tuple_(m.Bar.quality_rank, m.Bar.observed_at),
+                )
+            )
 
     def write_live(self, series: dict[str, int], observations: Sequence[Observation]) -> None:
-        with database_connection(self.engine) as conn:
-            self._write(conn, series, observations)
+        with database_session(self.engine) as session:
+            self._write(session, series, observations)
         self._partitions.update((o.bar.timestamp.year, o.bar.timestamp.month) for o in observations)
 
     def complete_range(
-        self,
-        run_id: UUID,
-        series: dict[str, int],
-        window: TimeRange,
-        observations: Sequence[Observation],
+        self, run_id: UUID, series: dict[str, int], window: TimeRange, observations: Sequence[Observation]
     ) -> None:
-        counts = Counter(o.bar.symbol for o in observations)
-        with database_connection(self.engine) as conn:
-            self._write(conn, series, observations)
-            with conn.cursor() as cur:
-                cur.executemany(
-                    "insert into public.ranges "
-                    "(series_id,range_start,range_end,run_id,status,bar_count,completed_at) "
-                    "values (%s,%s,%s,%s,'complete',%s,clock_timestamp()) "
-                    "on conflict (series_id,range_start,range_end) do update set "
-                    "status='complete',run_id=excluded.run_id,bar_count=excluded.bar_count,"
-                    "completed_at=excluded.completed_at",
-                    [
-                        (sid, window.start, window.end, run_id, counts[symbol])
-                        for symbol, sid in series.items()
-                    ],
-                )
+        with database_session(self.engine) as session:
+            self._write(session, series, observations)
+            self._coverage(session, run_id, series, window, Counter(o.bar.symbol for o in observations))
         self._partitions.update((o.bar.timestamp.year, o.bar.timestamp.month) for o in observations)
 
-    @contextmanager
-    def singleton(self, stream_key: str) -> Iterator[Connection]:
-        # A dedicated session, never a transaction-pooler connection.
-        with psycopg.connect(
-            self.dsn, autocommit=True, connect_timeout=10, application_name="bagel-stream-lock"
-        ) as conn:
-            acquired = _scalar(
-                conn.execute("select pg_try_advisory_lock(hashtextextended(%s,0))", (stream_key,))
+    @staticmethod
+    def _coverage(
+        session: Session, run_id: UUID, series: dict[str, int], window: TimeRange, counts: dict[str, int]
+    ):
+        statement = insert(m.CoverageRange).values(
+            [
+                dict(
+                    series_id=sid,
+                    range_start=window.start,
+                    range_end=window.end,
+                    run_id=run_id,
+                    status="complete",
+                    bar_count=counts.get(symbol, 0),
+                    completed_at=func.clock_timestamp(),
+                )
+                for symbol, sid in series.items()
+            ]
+        )
+        session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[
+                    m.CoverageRange.series_id,
+                    m.CoverageRange.range_start,
+                    m.CoverageRange.range_end,
+                ],
+                set_={
+                    name: getattr(statement.excluded, name)
+                    for name in ("run_id", "status", "bar_count", "completed_at")
+                },
             )
+        )
+
+    def complete_coverage(
+        self, run_id: UUID, series: dict[str, int], window: TimeRange, counts: dict[str, int]
+    ) -> None:
+        with database_session(self.engine) as session:
+            if self.write_guard:
+                self.write_guard(session)
+            self._coverage(session, run_id, series, window, counts)
+
+    @contextmanager
+    def singleton(self, stream_key: str) -> Iterator[Session]:
+        # Pin a connection across ORM commits for a PostgreSQL session-level lock.
+        with self.engine.connect() as connection, Session(bind=connection) as session:
+            acquired = session.scalar(select(func.pg_try_advisory_lock(func.hashtextextended(stream_key, 0))))
+            session.commit()
             if not acquired:
                 raise StreamAlreadyOwned("Another worker owns this source/feed stream")
             try:
-                yield conn
+                yield session
             finally:
-                if not conn.closed:
-                    conn.execute("select pg_advisory_unlock(hashtextextended(%s,0))", (stream_key,))
+                session.rollback()
+                session.scalar(select(func.pg_advisory_unlock(func.hashtextextended(stream_key, 0))))
+                session.commit()
 
     def repair_cursor(self, stream_key: str, default: datetime) -> datetime:
-        with database_connection(self.engine) as conn:
-            return _scalar(
-                conn.execute(
-                    "insert into public.stream_state(stream_key,repair_cursor) values (%s,%s) "
-                    "on conflict(stream_key) do update set heartbeat_at=clock_timestamp() "
-                    "returning repair_cursor",
-                    (stream_key, default),
-                )
+        with database_session(self.engine) as session:
+            statement = insert(m.StreamState).values(stream_key=stream_key, repair_cursor=default)
+            result = session.scalar(
+                statement.on_conflict_do_update(
+                    index_elements=[m.StreamState.stream_key], set_={"heartbeat_at": func.clock_timestamp()}
+                ).returning(m.StreamState.repair_cursor)
             )
+            assert result is not None
+            return result
 
     def advance_cursor(self, stream_key: str, cursor: datetime) -> None:
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "update public.stream_state set repair_cursor=greatest(repair_cursor,%s),"
-                "heartbeat_at=clock_timestamp() where stream_key=%s",
-                (cursor, stream_key),
+        with database_session(self.engine) as session:
+            session.execute(
+                update(m.StreamState)
+                .where(m.StreamState.stream_key == stream_key)
+                .values(
+                    repair_cursor=func.greatest(m.StreamState.repair_cursor, cursor),
+                    heartbeat_at=func.clock_timestamp(),
+                )
             )
 
     def pending_ranges(self) -> int:
-        with database_connection(self.engine) as conn:
-            return _scalar(conn.execute("select count(*) from public.ranges where status='pending'"))
+        with database_session(self.engine) as session:
+            return (
+                session.scalar(
+                    select(func.count())
+                    .select_from(m.CoverageRange)
+                    .where(m.CoverageRange.status == "pending")
+                )
+                or 0
+            )
 
     def database_bytes(self) -> int:
-        with database_connection(self.engine) as conn:
-            return _scalar(conn.execute("select pg_database_size(current_database())"))
+        with database_session(self.engine) as session:
+            return session.scalar(select(func.pg_database_size(func.current_database()))) or 0
 
     def watchlist_capacity(self, stream_key: str) -> tuple[int, int]:
-        with database_connection(self.engine) as conn:
-            row = conn.execute(
-                "select revision,pg_database_size(current_database()) "
-                "from public.watchlists where stream_key=%s",
-                (stream_key,),
-            ).fetchone()
-        if row is None:
-            raise WatchlistChanged("Watchlist no longer exists")
-        return row[0], row[1]
+        with database_session(self.engine) as session:
+            row = session.execute(
+                select(m.Watchlist.revision, func.pg_database_size(func.current_database())).where(
+                    m.Watchlist.stream_key == stream_key
+                )
+            ).first()
+            if row is None:
+                raise WatchlistChanged("Watchlist no longer exists")
+            return row[0], row[1]
 
     def watchlist(self, stream_key: str) -> Watchlist:
-        with database_connection(self.engine) as conn:
-            row = conn.execute(
-                "select stream_key,symbols,revision,loaded_revision,attempt_years,"
-                "history_start,history_end,status from public.watchlists where stream_key=%s",
-                (stream_key,),
-            ).fetchone()
-        if row is None:
-            raise ValueError("Watchlist has not been initialized")
-        return Watchlist(row[0], tuple(row[1]), *row[2:])
+        with database_session(self.engine) as session:
+            row = session.get(m.Watchlist, stream_key)
+            if row is None:
+                raise ValueError("Watchlist has not been initialized")
+            return Watchlist(
+                row.stream_key,
+                tuple(row.symbols),
+                row.revision,
+                row.loaded_revision,
+                row.attempt_years,
+                row.history_start,
+                row.history_end,
+                row.status,
+            )
 
     def configure_watchlist(self, settings: Settings) -> Watchlist:
-        stream_key = "alpaca:" + settings.feed
-        symbols = sorted(settings.symbols)
-        signature = configuration_signature(settings)
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "insert into public.watchlists(stream_key,symbols,config_signature) "
-                "values (%s,%s,%s) on conflict(stream_key) do nothing",
-                (stream_key, symbols, signature),
+        key, symbols, signature = (
+            "alpaca:" + settings.feed,
+            sorted(settings.symbols),
+            configuration_signature(settings),
+        )
+        with database_session(self.engine) as session:
+            session.execute(
+                insert(m.Watchlist)
+                .values(stream_key=key, symbols=symbols, config_signature=signature)
+                .on_conflict_do_nothing()
             )
-            row = conn.execute(
-                "select config_signature from public.watchlists where stream_key=%s for update",
-                (stream_key,),
-            ).fetchone()
+            row = session.scalar(select(m.Watchlist).where(m.Watchlist.stream_key == key).with_for_update())
             assert row is not None
-            if row[0] is None:
-                # A watchlist saved through the CLI wins over unchanged startup defaults.
-                conn.execute(
-                    "update public.watchlists set config_signature=%s where stream_key=%s",
-                    (signature, stream_key),
+            if row.config_signature is None:
+                row.config_signature = signature
+            elif row.config_signature != signature:
+                row.symbols, row.config_signature, row.attempt_years, row.status = (
+                    symbols,
+                    signature,
+                    None,
+                    "pending",
                 )
-            elif row[0] != signature:
-                conn.execute(
-                    "update public.watchlists set symbols=%s,config_signature=%s,"
-                    "revision=revision+1,attempt_years=null,status='pending',"
-                    "updated_at=clock_timestamp() where stream_key=%s",
-                    (symbols, signature, stream_key),
-                )
-        return self.watchlist(stream_key)
+                row.updated_at = datetime.now(UTC)
+        return self.watchlist(key)
 
     def set_watchlist(self, settings: Settings) -> Watchlist:
-        stream_key, symbols = "alpaca:" + settings.feed, sorted(settings.symbols)
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "insert into public.watchlists(stream_key,symbols) values (%s,%s) "
-                "on conflict(stream_key) do update set symbols=excluded.symbols,"
-                "revision=watchlists.revision+1,attempt_years=null,status='pending',"
-                "updated_at=clock_timestamp() "
-                "where watchlists.symbols is distinct from excluded.symbols",
-                (stream_key, symbols),
+        key, symbols = "alpaca:" + settings.feed, sorted(settings.symbols)
+        with database_session(self.engine) as session:
+            statement = insert(m.Watchlist).values(stream_key=key, symbols=symbols)
+            session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[m.Watchlist.stream_key],
+                    set_={
+                        "symbols": symbols,
+                        "attempt_years": None,
+                        "status": "pending",
+                        "updated_at": func.clock_timestamp(),
+                    },
+                    where=m.Watchlist.symbols.is_distinct_from(statement.excluded.symbols),
+                )
             )
-        return self.watchlist(stream_key)
+        return self.watchlist(key)
 
     def begin_history(self, stream_key: str, revision: int, years: int, window: TimeRange) -> bool:
-        with database_connection(self.engine) as conn:
-            conn.execute("select pg_advisory_xact_lock(74021803)")
+        with database_session(self.engine) as session:
+            session.scalar(select(func.pg_advisory_xact_lock(74021803)))
             return (
-                conn.execute(
-                    "update public.watchlists set attempt_years=%s,"
-                    "history_start=%s,history_end=%s,status='loading',"
-                    "updated_at=clock_timestamp() where stream_key=%s and revision=%s "
-                    "returning revision",
-                    (years, window.start, window.end, stream_key, revision),
-                ).fetchone()
+                session.scalar(
+                    update(m.Watchlist)
+                    .where(m.Watchlist.stream_key == stream_key, m.Watchlist.revision == revision)
+                    .values(
+                        attempt_years=years,
+                        history_start=window.start,
+                        history_end=window.end,
+                        status="loading",
+                        updated_at=func.clock_timestamp(),
+                    )
+                    .returning(m.Watchlist.revision)
+                )
                 is not None
             )
 
     def finish_history(self, stream_key: str, revision: int) -> bool:
-        with database_connection(self.engine) as conn:
+        with database_session(self.engine) as session:
             return (
-                conn.execute(
-                    "update public.watchlists set loaded_revision=revision,status='ready',"
-                    "updated_at=clock_timestamp() where stream_key=%s and revision=%s "
-                    "returning revision",
-                    (stream_key, revision),
-                ).fetchone()
+                session.scalar(
+                    update(m.Watchlist)
+                    .where(m.Watchlist.stream_key == stream_key, m.Watchlist.revision == revision)
+                    .values(
+                        loaded_revision=m.Watchlist.revision, status="ready", updated_at=func.clock_timestamp()
+                    )
+                    .returning(m.Watchlist.revision)
+                )
                 is not None
             )
 
     def fail_history(self, stream_key: str, revision: int) -> None:
-        with database_connection(self.engine) as conn:
-            conn.execute(
-                "update public.watchlists set status='failed' where stream_key=%s and revision=%s",
-                (stream_key, revision),
+        with database_session(self.engine) as session:
+            session.execute(
+                update(m.Watchlist)
+                .where(m.Watchlist.stream_key == stream_key, m.Watchlist.revision == revision)
+                .values(status="failed")
             )
 
     def reset_history(
         self, stream_key: str, revision: int, years: int, window: TimeRange, budget: int
     ) -> bool:
-        with database_connection(self.engine) as conn:
-            reset = _scalar(
-                conn.execute(
-                    "select public.reset_history_for_capacity(%s,%s,%s,%s,%s,%s)",
-                    (stream_key, revision, years, window.start, window.end, budget),
+        with database_session(self.engine) as session:
+            reset = bool(
+                session.scalar(
+                    select(
+                        func.public.reset_history_for_capacity(
+                            stream_key, revision, years, window.start, window.end, budget
+                        )
+                    )
                 )
             )
         if reset:

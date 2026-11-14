@@ -29,9 +29,7 @@ def load_watchlist(provider, store, settings: Settings, watchlist: Watchlist):
     budget = settings.database_budget_mb * 1_000_000
     if watchlist.loaded_revision == watchlist.revision and store.database_bytes() < budget:
         return {"status": "unchanged", "years": watchlist.attempt_years}
-    selected = Settings.model_validate(
-        {**settings.model_dump(), "symbols": list(watchlist.symbols)}
-    )
+    selected = Settings.model_validate({**settings.model_dump(), "symbols": list(watchlist.symbols)})
     requested = selected.history_window()
     options = history_options(selected, requested)
     if watchlist.attempt_years is not None:
@@ -72,9 +70,7 @@ def load_watchlist(provider, store, settings: Settings, watchlist: Watchlist):
                 pass
             if index + 1 == len(options):
                 store.fail_history(watchlist.stream_key, watchlist.revision)
-                raise HistoryDoesNotFit(
-                    "Even one year does not fit; reduce the watchlist or add capacity"
-                )
+                raise HistoryDoesNotFit("Even one year does not fit; reduce the watchlist or add capacity")
             next_years, next_window = options[index + 1]
             log.warning("history_capacity_fallback", extra={"years": next_years})
             if not store.reset_history(

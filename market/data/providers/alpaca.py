@@ -15,6 +15,7 @@ from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from random import uniform
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from alpaca.data.enums import DataFeed
@@ -23,6 +24,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from ..collectors import Capabilities
 from ..config import Settings
 from ..domain import NEW_YORK, Bar, Instrument, MarketClock, Origin, TimeRange, TradingDay
 
@@ -56,6 +58,7 @@ def normalize_bar(symbol: str, raw: dict[str, Any]) -> Bar:
 
 class AlpacaREST:
     source = "alpaca"
+    capabilities = Capabilities("alpaca", True, True, True, True, False)
 
     def __init__(self, settings: Settings, client: httpx.Client | None = None):
         self.settings = settings
@@ -80,12 +83,19 @@ class AlpacaREST:
 
     def _get(self, url: str, params: dict[str, Any]) -> dict[str, Any] | list[Any]:
         key, secret = self.settings.alpaca_api_key, self.settings.alpaca_secret_key
-        if key is None or secret is None:
+        if self.settings.data_relay:
+            if self.settings.relay_key is None:
+                raise ProviderError("Missing data relay authentication")
+            service = "data" if urlsplit(url).netloc == "data.alpaca.markets" else "reference"
+            url = self.settings.data_relay + "/" + service + urlsplit(url).path
+            headers = {"X-API-Key": self.settings.relay_key.get_secret_value()}
+        elif key is None or secret is None:
             raise ProviderError("Missing Alpaca API key or secret")
-        headers = {
-            "APCA-API-KEY-ID": key.get_secret_value(),
-            "APCA-API-SECRET-KEY": secret.get_secret_value(),
-        }
+        else:
+            headers = {
+                "APCA-API-KEY-ID": key.get_secret_value(),
+                "APCA-API-SECRET-KEY": secret.get_secret_value(),
+            }
         for attempt in range(6):
             if self._stop.is_set():
                 raise TransientProviderError("Provider operation cancelled")
@@ -94,8 +104,7 @@ class AlpacaREST:
                 self._pause(
                     max(
                         0,
-                        60 / self.settings.requests_per_minute
-                        - (time.monotonic() - self._last_request),
+                        60 / self.settings.requests_per_minute - (time.monotonic() - self._last_request),
                     )
                 )
                 self._last_request = time.monotonic()
@@ -115,18 +124,14 @@ class AlpacaREST:
                         try:
                             delay = max(
                                 delay,
-                                (
-                                    parsedate_to_datetime(retry_after) - datetime.now(UTC)
-                                ).total_seconds(),
+                                (parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds(),
                             )
                         except (TypeError, ValueError):
                             pass
             if attempt < 5:
                 log.warning("provider_retry", extra={"attempt": attempt + 1})
                 if delay > 120:
-                    raise TransientProviderError(
-                        "Provider requested a retry beyond this retry budget"
-                    )
+                    raise TransientProviderError("Provider requested a retry beyond this retry budget")
                 self._pause(max(delay, 0))
         raise TransientProviderError("Alpaca request exhausted transient retries")
 
@@ -137,6 +142,18 @@ class AlpacaREST:
         if raw.get("status") != "active":
             raise ProviderError(f"Instrument is not active: {symbol}")
         return Instrument(str(raw["id"]), str(raw["symbol"]), str(raw["name"]))
+
+    def instruments(self) -> list[Instrument]:
+        raw = self._get(
+            f"{self.settings.alpaca_endpoint}/v2/assets", {"status": "active", "asset_class": "us_equity"}
+        )
+        if not isinstance(raw, list):
+            raise ProviderError("Unexpected asset universe response")
+        return [
+            Instrument(str(item["id"]), str(item["symbol"]), str(item["name"]))
+            for item in raw
+            if item.get("class") == "us_equity" and item.get("status") == "active"
+        ]
 
     def calendar(self, start: date, end: date) -> dict[date, TradingDay]:
         raw = self._get(
@@ -151,11 +168,7 @@ class AlpacaREST:
 
             def local_time(value: str, day: date = day) -> datetime:
                 # The calendar endpoint returns NY wall times, including early closes.
-                return (
-                    datetime.fromisoformat(f"{day}T{value}")
-                    .replace(tzinfo=NEW_YORK)
-                    .astimezone(UTC)
-                )
+                return datetime.fromisoformat(f"{day}T{value}").replace(tzinfo=NEW_YORK).astimezone(UTC)
 
             days[day] = TradingDay(day, local_time(item["open"]), local_time(item["close"]))
         return days
@@ -231,6 +244,11 @@ class AlpacaStream:
 
     async def events(self, symbols: Sequence[str]) -> AsyncIterator[tuple[Bar, Origin]]:
         key, secret = self.settings.alpaca_api_key, self.settings.alpaca_secret_key
+        if self.settings.data_relay:
+            if self.settings.relay_key is None:
+                raise ProviderError("Missing data relay authentication")
+            key = self.settings.relay_key
+            secret = self.settings.relay_key
         if key is None or secret is None:
             raise ProviderError("Missing Alpaca API key or secret")
 
@@ -247,8 +265,18 @@ class AlpacaStream:
             return messages
 
         try:
+            endpoint = self.settings.stream_endpoint
+            options: dict[str, Any] = {}
+            if self.settings.data_relay:
+                endpoint = (
+                    self.settings.data_relay.replace("http://", "ws://") + f"/stream/{self.settings.feed}"
+                )
+                options["additional_headers"] = {"X-API-Key": key.get_secret_value()}
+            if endpoint is None:
+                raise ProviderError("Stock stream endpoint is not configured")
             async with self.connect_factory(
-                f"wss://stream.data.alpaca.markets/v2/{self.settings.feed}",
+                endpoint,
+                **options,
                 open_timeout=15,
                 close_timeout=3,
                 ping_interval=20,
@@ -272,9 +300,7 @@ class AlpacaStream:
                 if not any(m.get("msg") == "authenticated" for m in auth):
                     raise ProviderError("Missing authentication acknowledgment")
                 await socket.send(
-                    json.dumps(
-                        {"action": "subscribe", "bars": list(symbols), "updatedBars": list(symbols)}
-                    )
+                    json.dumps({"action": "subscribe", "bars": list(symbols), "updatedBars": list(symbols)})
                 )
                 subscription = decode(await asyncio.wait_for(socket.recv(), 10))
                 if not any(
@@ -289,7 +315,7 @@ class AlpacaStream:
                     for message in decode(frame):
                         kind = message.get("T")
                         if kind in ("b", "u"):
-                            if message.get("S") not in symbols:
+                            if "*" not in symbols and message.get("S") not in symbols:
                                 raise ProviderError("Unexpected stream symbol")
                             yield (
                                 normalize_bar(message["S"], message),

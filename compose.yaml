@@ -1,66 +1,280 @@
 name: bagel
 
+x-database-env: &database-env
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_DATABASE: ${DB_DATABASE:?Set DB_DATABASE in .env}
+  DB_USER: ${DB_USER:?Set DB_USER in .env}
+  DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+  DATABASE_URL: ""
+
+x-worker: &worker
+  image: bagel-api:local
+  build:
+    context: .
+    dockerfile: api/dockerfile
+    target: api
+  read_only: true
+  tmpfs: [/tmp]
+  volumes:
+    - ./market:/app/market:ro
+    - research-artifacts:/app/research
+  environment: &worker-env
+    <<: *database-env
+    BAGEL_ARTIFACTS: /app/research
+    BAGEL_REDIS_URL: redis://redis:6379/0
+    OPENBLAS_NUM_THREADS: "1"
+    OMP_NUM_THREADS: "1"
+    ARROW_NUM_THREADS: "1"
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  stop_grace_period: 45s
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-m", "market.probe"]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 20s
+
 services:
   api:
+    <<: *worker
     container_name: bagel-api
+    env_file: .env
+    command: ["uvicorn", "api.main:app", "--reload", "--reload-dir", "/app/api", "--reload-dir", "/app/market", "--host", "0.0.0.0", "--port", "8001"]
+    ports: ["127.0.0.1:8001:8001"]
+    environment:
+      <<: *worker-env
+      BAGEL_EXTERNAL_WORKERS: "true"
+      BAGEL_INGESTION_ENABLED: ${BAGEL_INGESTION_ENABLED:-false}
+      # The control plane must never receive provider or execution credentials.
+      ALPACA_API_KEY: ""
+      ALPACA_SECRET_KEY: ""
+      ALPACA_API_SECRET: ""
+      APCA_API_KEY_ID: ""
+      APCA_API_SECRET_KEY: ""
+      ALPACA_DATA_API_KEY: ""
+      ALPACA_DATA_SECRET_KEY: ""
+      MASSIVE_API_KEY: ""
+      MASSIVE_S3_ACCESS_KEY_ID: ""
+      MASSIVE_S3_SECRET_ACCESS_KEY: ""
+      MASSIVE_S3_SECRET_KEY: ""
+      MASSIVE_S3_ENDPOINT_URL: ""
+      MASSIVE_S3_BUCKET_NAME: ""
+    volumes:
+      - ./api:/app/api:ro
+      - ./market:/app/market:ro
+      - research-artifacts:/app/research
+    cpus: 1
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  migrate:
     image: bagel-api:local
     build:
       context: .
       dockerfile: api/dockerfile
       target: api
-    env_file: .env
-    command: ["uvicorn", "api.main:app", "--reload", "--reload-dir", "/app/api", "--reload-dir", "/app/market", "--host", "0.0.0.0", "--port", "8001"]
+    command: ["python", "-m", "market.migrations"]
+    environment: *database-env
+    volumes: ["./database/ddl:/app/database/ddl:ro", "./market:/app/market:ro"]
+    read_only: true
+    tmpfs: [/tmp]
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:8001:8001"
-    environment:
-      # localhost in .env is for host tools; containers use the Compose service.
-      DB_HOST: db
-      DB_PORT: "5432"
-      DATABASE_URL: ""
-      BAGEL_ARTIFACTS: /app/research
-      # Provider access remains on hold, regardless of other .env settings.
-      BAGEL_INGESTION_ENABLED: "false"
-      BAGEL_AUTO_BACKFILL: "false"
-      BAGEL_STREAM_ENABLED: "false"
-    read_only: true
-    tmpfs:
-      - /tmp
-    volumes:
-      - ./api:/app/api:ro
-      - ./market:/app/market:ro
-      - research-artifacts:/app/research
-    stop_grace_period: 30s
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3)"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+    mem_limit: 256m
 
   db:
     container_name: bagel-db
-    image: postgres:17.11-bookworm
+    image: bagel-db:local
+    build:
+      context: .
+      dockerfile: database/dockerfile
     environment:
       POSTGRES_DB: ${DB_DATABASE:?Set DB_DATABASE in .env}
       POSTGRES_USER: ${DB_USER:?Set DB_USER in .env}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       PGDATABASE: ${DB_DATABASE:?Set DB_DATABASE in .env}
       PGUSER: ${DB_USER:?Set DB_USER in .env}
-    ports:
-      - "${DB_PORT:?Set DB_PORT in .env}:5432"
-    volumes:
-      - database-data:/var/lib/postgresql/data
-      - ./database/ddl:/docker-entrypoint-initdb.d:ro
+    ports: ["${DB_PORT:?Set DB_PORT in .env}:5432"]
+    volumes: ["database-data:/var/lib/postgresql/data"]
+    shm_size: 256m
+    cpus: 2
+    mem_limit: 2g
+    restart: unless-stopped
     healthcheck:
-      # The temporary initialization server does not listen on TCP.
       test: ["CMD", "pg_isready", "--host", "127.0.0.1"]
       interval: 5s
       timeout: 5s
       retries: 20
 
+  redis:
+    image: redis:7.4.7-bookworm@sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "192mb", "--maxmemory-policy", "noeviction", "--save", ""]
+    volumes: ["redis-data:/data"]
+    cpus: 0.5
+    mem_limit: 256m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  publisher:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "publisher"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: publisher
+    cpus: 0.5
+    mem_limit: 256m
+
+  consumer:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "consumer"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: consumer
+    cpus: 0.5
+    mem_limit: 256m
+
+  market:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "market"]
+    environment:
+      BAGEL_REDIS_URL: redis://redis:6379/0
+      BAGEL_WORKER_ROLE: market
+      BAGEL_INGESTION_ENABLED: ${BAGEL_INGESTION_ENABLED:-false}
+      BAGEL_DATA_RELAY: http://relay:8011
+      BAGEL_API_KEY: ${BAGEL_API_KEY:?Set BAGEL_API_KEY in .env}
+      BAGEL_FEED: ${BAGEL_FEED:-iex}
+      BAGEL_SYMBOLS: ${BAGEL_SYMBOLS:-SPY,QQQ,IWM,VXUS}
+      BAGEL_ALPACA_PLAN: ${BAGEL_ALPACA_PLAN:-basic}
+      BAGEL_AUTO_BACKFILL: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    cpus: 1
+    mem_limit: 512m
+
+  research:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "research"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: research
+      BAGEL_RESEARCH_PROCESSES: ${BAGEL_RESEARCH_PROCESSES:-2}
+    cpus: 2
+    mem_limit: 1536m
+
+  relay:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "relay"]
+    environment:
+      BAGEL_REDIS_URL: redis://redis:6379/0
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      BAGEL_API_KEY: ${BAGEL_API_KEY:?Set BAGEL_API_KEY in .env}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/health/live', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    cpus: 0.5
+    mem_limit: 256m
+
+  history:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "history"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: history
+      BAGEL_INGESTION_ENABLED: ${BAGEL_INGESTION_ENABLED:-false}
+      BAGEL_DATA_RELAY: http://relay:8011
+      BAGEL_API_KEY: ${BAGEL_API_KEY:?Set BAGEL_API_KEY in .env}
+      BAGEL_FEED: ${BAGEL_FEED:-iex}
+      BAGEL_SYMBOLS: ${BAGEL_SYMBOLS:-SPY,QQQ,IWM,VXUS}
+      BAGEL_ALPACA_PLAN: ${BAGEL_ALPACA_PLAN:-basic}
+      BAGEL_AUTO_BACKFILL: "false"
+      BAGEL_DATABASE_BUDGET_MB: ${BAGEL_DATABASE_BUDGET_MB:-100000}
+    cpus: 0.5
+    mem_limit: 512m
+
+  execution:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "execution"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: execution
+      BAGEL_FEED: ${BAGEL_FEED:-iex}
+      BAGEL_API_KEY: ${BAGEL_API_KEY:?Set BAGEL_API_KEY in .env}
+      ALPACA_ENDPOINT: ${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      BAGEL_PAPER_SUBMISSION_ENABLED: ${BAGEL_PAPER_SUBMISSION_ENABLED:-false}
+    cpus: 1
+    mem_limit: 512m
+
+  strategy:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "strategy"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: strategy
+    cpus: 1
+    mem_limit: 768m
+
+  massive:
+    <<: *worker
+    command: ["python", "-m", "market.workers", "massive"]
+    environment:
+      <<: *worker-env
+      BAGEL_WORKER_ROLE: massive
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
+      MASSIVE_S3_ACCESS_KEY_ID: ${MASSIVE_S3_ACCESS_KEY_ID:-}
+      MASSIVE_S3_ENDPOINT_URL: ${MASSIVE_S3_ENDPOINT_URL:-}
+      MASSIVE_S3_BUCKET_NAME: ${MASSIVE_S3_BUCKET_NAME:-}
+      MASSIVE_REQUESTS_PER_MINUTE: ${MASSIVE_REQUESTS_PER_MINUTE:-5}
+      BAGEL_DATABASE_BUDGET_MB: ${BAGEL_DATABASE_BUDGET_MB:-100000}
+    cpus: 0.5
+    mem_limit: 512m
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: dockerfile
+    ports: ["127.0.0.1:3000:3000"]
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      api:
+        condition: service_healthy
+    cpus: 0.5
+    mem_limit: 512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   database-data:
   research-artifacts:
+  redis-data:

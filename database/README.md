@@ -1,8 +1,9 @@
 # PostgreSQL DDL
 
-Local development uses standard PostgreSQL 17, not the Supabase platform. The
-hosted database remains Supabase PostgreSQL. From the repository root, start
-PostgreSQL and the single Bagel API with `docker compose up`.
+Local development uses PostgreSQL 17.11 with TimescaleDB 2.32.0, not the Supabase
+platform. The custom image retains the existing PostgreSQL/Debian base and
+populated volume. Hosted PostgreSQL remains Supabase. Start the complete local
+platform from the repository root with `docker compose up`.
 
 All current application tables and functions live in `public`, including monthly
 bar partitions and the legacy `migrations` audit table. The two formerly named
@@ -11,10 +12,11 @@ separation remains in Python modules, not separate database schemas.
 
 ## Initialization
 
-Compose mounts `ddl/` read-only at `/docker-entrypoint-initdb.d/`. PostgreSQL's
-official entrypoint applies the SQL in filename order **only when its data
-directory is empty**. No separate migration service, Supabase CLI, or application
-startup DDL is involved. PostgreSQL reads its initial database, superuser and
+The `migrate` service is the sole DDL runner. It mounts `ddl/` read-only, holds an
+advisory lock, and transactionally applies sequential files using SHA-256 checksums
+and `public.bagel_schema_migrations`. Both fresh and populated local volumes are
+supported. DDL is **not** also mounted into `initdb`.
+PostgreSQL reads its initial database, superuser and
 password from `DB_DATABASE`, `DB_USER` and `DB_PASSWORD` through Compose; tracked
 files contain no credential values or fallback passwords.
 
@@ -49,27 +51,24 @@ System schemas are not changed.
 The fourth file preserves the owner-only historical deployment marker; it does
 not enable continuous deployment. The fifth adds the datasets, durable job
 queue, leases, batch membership, grants and RLS required by the current backend.
-Supabase infrastructure initialization SQL is not needed. The former Python
-migration helper's native ledger and login-provisioning code are not needed for
-fresh Docker initialization and have been removed.
+Supabase platform initialization is not needed. The current local-only
+`market/migrations.py` runner does not provision credential-bearing logins. It
+adopts only a recognized baseline after checking its actual objects; an unknown
+partial initialization fails instead of guessing or replaying historical SQL.
 
 ## Subsequent changes
 
-Add the next sequential `NNNN.name.sql` file; do not rewrite existing files.
-Restarting a populated PostgreSQL volume **does not apply new files**. Existing
-databases need an explicitly authorized, reviewed forward migration, or an
-explicitly approved fresh disposable volume. Never delete data to make startup
-pass, and never replay bootstrap SQL against the hosted database.
+Add the next sequential `NNNN.name.sql` file; never rewrite an applied file.
+`docker compose up` runs migrations before dependent services start. Repeated
+runs verify checksums without reapplying completed files. Stop affected workers
+for incompatible changes: automatic migration does not make arbitrary future
+DDL online-safe. Never reset/delete a volume or replay bootstrap SQL to migrate.
 
-For an existing local database still on files `0001`–`0005`, stop the API before
-applying `0006` **once** with the database owner's connection. The migration is
-transactional and has a bounded lock wait. Do not replay the first five files.
-
-```sh
-docker compose stop api
-docker compose exec -T db psql -X --set=ON_ERROR_STOP=1 < database/ddl/0006.consolidate_public_schema.sql
-docker compose up --build -d
-```
+Files `0007` onward add the revision hypertable, retained event journal, provider
+jobs, experiment queue, account ledger/audit, and leased strategy actors. Existing
+native monthly latest-bar partitions remain alongside the revision hypertable.
+There is no automatic archive/journal pruning: pinned datasets and recovery must
+be accounted for before a future retention change.
 
 The database container supplies its configured user/database through runtime
 environment variables, so no credentials appear in these command arguments.
@@ -80,5 +79,5 @@ integration or rewrite its timestamped migration history. That integration used
 resolved separately before a future release; it is on hold. Hosted settings,
 credentials, existing data and the collector's automation schedule are unchanged.
 
-See the root [startup instructions](../README.md#local-postgresql-stack) and the
+See the root [startup instructions](../README.md#start-the-local-platform) and the
 [official PostgreSQL image initialization documentation](https://github.com/docker-library/docs/tree/master/postgres#initialization-scripts).

@@ -60,9 +60,7 @@ class Ledger:
 
     @property
     def short_notional(self) -> Decimal:
-        return sum(
-            (-p.shares * self.marks[i] for i, p in self.positions.items() if p.shares < 0), ZERO
-        )
+        return sum((-p.shares * self.marks[i] for i, p in self.positions.items() if p.shares < 0), ZERO)
 
     def book(self, fill: Fill) -> None:
         position, realized = self.position(fill.instrument).apply(fill.shares, fill.price)

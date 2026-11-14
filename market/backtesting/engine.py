@@ -12,10 +12,12 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from market.data.domain import MINUTE, NEW_YORK, Bar
 from market.execution.simulator import FillModel, simulate_open
 from market.portfolio.ledger import ZERO, Fill, Ledger
+from market.portfolio.targets import target_quantity
 from market.risk.policy import RiskLimits
-from market.strategies.core import Strategy, StrategySpec, create_strategy
+from market.strategies.core import StrategySpec
+from market.strategies.runtime import StrategyRuntime
 
-ENGINE_VERSION = "equity-minute-v1"
+ENGINE_VERSION = "equity-minute-v2"
 
 
 class BacktestSpec(BaseModel):
@@ -26,12 +28,14 @@ class BacktestSpec(BaseModel):
     start: AwareDatetime | None = None
     end: AwareDatetime | None = None
     split: Literal["exploratory", "train", "validation", "holdout"] = "exploratory"
-    instruments: tuple[str, ...] = Field(default=(), max_length=100)
+    instruments: tuple[str, ...] = ()
     data_delay_seconds: int = Field(default=5, ge=0, le=900)
     signal_lifetime_seconds: int = Field(default=600, ge=60, le=3600)
+    missing_policy: Literal["available", "require_all"] = "available"
+    min_coverage_fraction: Decimal = Field(default=Decimal(1), gt=0, le=1)
     fill_model: FillModel = Field(default_factory=FillModel)
     risk: RiskLimits = Field(default_factory=RiskLimits)
-    borrow_instruments: tuple[str, ...] = Field(default=(), max_length=100)
+    borrow_instruments: tuple[str, ...] = ()
     borrow_annual_bps: Decimal = Field(default=Decimal(500), ge=0, le=Decimal(100_000))
 
     @field_validator("instruments", "borrow_instruments")
@@ -71,15 +75,18 @@ def run_backtest(
     spec: BacktestSpec,
     actions: tuple[CashOrSplitEvent, ...] = (),
     checkpoint: Callable[[], None] | None = None,
+    fill_sink: Callable[[Fill], None] | None = None,
 ) -> dict:
     ledger = Ledger(spec.initial_cash)
     fills: list[Fill] = []
+    fill_count = 0
     rejections: Counter[str] = Counter()
-    strategies: dict[str, Strategy] = {}
+    runtime = StrategyRuntime(spec.strategy)
     queued: list[tuple[datetime, int, str, Intent]] = []
     order = count()
     pending: dict[str, Intent] = {}
     targets: dict[str, Decimal] = {}
+    quantities: dict[str, Decimal] = {}
     daily: dict[str, Decimal] = {}
     closing_marks: dict[str, Decimal] = {}
     peak = spec.initial_cash
@@ -92,8 +99,8 @@ def run_backtest(
     action = next(action_queue, None)
     previous: datetime | None = None
     count_bars = 0
-    for index, (timestamp, frame) in enumerate(groupby(bars, key=lambda b: b.timestamp)):
-        if checkpoint and index % 1024 == 0:
+    for timestamp, frame in groupby(bars, key=lambda b: b.timestamp):
+        if checkpoint:
             checkpoint()
         if spec.end and timestamp + MINUTE > spec.end:
             break
@@ -104,16 +111,15 @@ def run_backtest(
         if not batch:
             continue
         if trading and previous:
-            ledger.charge_borrow(
-                int((timestamp - previous).total_seconds()), spec.borrow_annual_bps
-            )
+            ledger.charge_borrow(int((timestamp - previous).total_seconds()), spec.borrow_annual_bps)
         while action and action.effective_at <= timestamp:
             if action.kind == "split":
                 ledger.split(action.instrument, action.value)
                 if action.instrument in closing_marks:
                     closing_marks[action.instrument] /= action.value
-                strategies.pop(action.instrument, None)
+                runtime.reset(action.instrument)
                 targets.pop(action.instrument, None)
+                quantities.pop(action.instrument, None)
                 pending.pop(action.instrument, None)
                 # Signals computed on pre-split prices cannot size a post-split order.
                 queued = [entry for entry in queued if entry[2] != action.instrument]
@@ -146,7 +152,11 @@ def run_backtest(
                     bar.symbol in borrow,
                 )
                 if isinstance(outcome, Fill):
-                    fills.append(outcome)
+                    fill_count += 1
+                    if fill_sink is not None:
+                        fill_sink(outcome)
+                    else:
+                        fills.append(outcome)
                 elif isinstance(outcome, str):
                     rejections[outcome] += 1
                 if ledger.position(bar.symbol).shares == intent.target:
@@ -158,15 +168,33 @@ def run_backtest(
             peak = max(peak, equity)
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
             daily[timestamp.astimezone(NEW_YORK).date().isoformat()] = equity
+        coverage = Decimal(len(batch)) / Decimal(len(instruments)) if instruments else Decimal(1)
+        complete = not instruments or len(batch) == len(instruments)
+        eligible = (complete or spec.missing_policy == "available") and coverage >= spec.min_coverage_fraction
+        weights = runtime.on_frame(batch) if eligible else {}
         for bar in batch:
-            if bar.symbol not in strategies:
-                strategies[bar.symbol] = create_strategy(spec.strategy)
-            weight = strategies[bar.symbol].on_close(bar.close)
-            if trading and weight is not None and targets.get(bar.symbol) != weight:
+            weight = weights.get(bar.symbol)
+            if trading and weight is not None:
+                quantity = target_quantity(
+                    weight,
+                    equity,
+                    bar.close,
+                    targets.get(bar.symbol),
+                    quantities.get(bar.symbol),
+                    spec.strategy.rebalance_policy,
+                )
+                changed = (
+                    spec.strategy.rebalance_policy == "every_frame"
+                    or targets.get(bar.symbol) != weight
+                    or quantities.get(bar.symbol) != quantity
+                )
+                if not changed:
+                    continue
                 targets[bar.symbol] = weight
+                quantities[bar.symbol] = Decimal(quantity)
                 available = timestamp + MINUTE + delay
                 # Fix whole-share size using the signal bar, before any later open is observed.
-                intent = Intent(int(weight * max(ZERO, equity) / bar.close), available, bar.volume)
+                intent = Intent(quantity, available, bar.volume)
                 heappush(queued, (available, next(order), bar.symbol, intent))
     if not count_bars:
         raise ValueError("No bars match the requested window and instruments")
@@ -184,7 +212,7 @@ def run_backtest(
             "fees": ledger.fees,
             "borrow_costs": ledger.financing,
             "cash_distributions": ledger.distributions,
-            "fills": len(fills),
+            "fills": fill_count,
             "bars": count_bars,
             "rejections": dict(rejections),
             "borrow_is_scenario": bool(borrow),

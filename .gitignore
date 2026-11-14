@@ -232,3 +232,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+ui/node_modules/
+ui/.next/
+ui/next-env.d.ts
+ui/*.tsbuildinfo

@@ -29,7 +29,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         queue = Queue(config.dsn())
         try:
             artifacts = await asyncio.to_thread(Artifacts, config.artifacts)
-            workers = BackgroundWorkers(queue, artifacts, ingestion_enabled=config.ingestion_enabled)
+            workers = BackgroundWorkers(
+                queue, artifacts, ingestion_enabled=config.ingestion_enabled, external=config.external_workers
+            )
             app.state.resources = Resources(config, queue, artifacts, workers)
             try:
                 workers.start()

@@ -2,28 +2,23 @@
 
 import logging
 import threading
+from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, CancelledError, ThreadPoolExecutor, wait
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
 
-from .config import Settings
+from .collectors import Collector, HistoryConfiguration
 from .domain import NEW_YORK, Observation, Origin, TimeRange
-from .ports import HistoricalBars, InstrumentLookup, TradingCalendar
 from .storage import PostgresStore
 from .watchlist import CapacityExceeded
 
 log = logging.getLogger(__name__)
 
 
-class HistoricalProvider(HistoricalBars, InstrumentLookup, TradingCalendar, Protocol):
-    pass
-
-
 def ingest_history(
-    provider: HistoricalProvider,
+    provider: Collector,
     store: PostgresStore,
-    settings: Settings,
+    settings: HistoryConfiguration,
     window: TimeRange,
     *,
     force: bool = False,
@@ -33,7 +28,7 @@ def ingest_history(
     workers: int = 1,
 ) -> dict[str, int | str]:
     series = series or store.resolve_series(
-        [provider.instrument(symbol) for symbol in settings.symbols], settings.feed
+        [provider.instrument(symbol) for symbol in settings.symbols], settings.feed, source=provider.source
     )
     calendar = provider.calendar(
         window.start.astimezone(NEW_YORK).date(),
@@ -55,35 +50,43 @@ def ingest_history(
             series
             if force
             else {
-                symbol: sid
-                for symbol, sid in series.items()
-                if (sid, chunk.start, chunk.end) not in covered
+                symbol: sid for symbol, sid in series.items() if (sid, chunk.start, chunk.end) not in covered
             }
         )
         if not pending:
             return chunk, 0, True
         store.mark_pending(run_id, list(pending.values()), chunk)
-        observations = []
-        observed_at = datetime.now(UTC)
-        for page in provider.pages(list(pending), chunk):
+        counts: Counter[str] = Counter()
+        symbols = sorted(pending)
+        for offset in range(0, len(symbols), settings.history_symbol_batch):
+            selected = {s: pending[s] for s in symbols[offset : offset + settings.history_symbol_batch]}
+            observations = []
+            observed_at = datetime.now(UTC)
+            for page in provider.pages(list(selected), chunk):
+                if cancelled.is_set():
+                    raise CancelledError()
+                received_at = datetime.now(UTC)
+                for bar in page:
+                    day = calendar.get(bar.timestamp.astimezone(NEW_YORK).date())
+                    session = (
+                        day.classify(bar.timestamp, settings.window_open, settings.window_close)
+                        if day
+                        else None
+                    )
+                    if session:
+                        observations.append(
+                            Observation(bar, session, Origin.HISTORICAL, observed_at, received_at)
+                        )
+                        counts[bar.symbol] += 1
+                    if len(observations) >= settings.batch_size:
+                        store.write_live(selected, observations)
+                        observations.clear()
+            if observations:
+                store.write_live(selected, observations)
             if cancelled.is_set():
                 raise CancelledError()
-            received_at = datetime.now(UTC)
-            for bar in page:
-                day = calendar.get(bar.timestamp.astimezone(NEW_YORK).date())
-                session = (
-                    day.classify(bar.timestamp, settings.window_open, settings.window_close)
-                    if day
-                    else None
-                )
-                if session:
-                    observations.append(
-                        Observation(bar, session, Origin.HISTORICAL, observed_at, received_at)
-                    )
-        if cancelled.is_set():
-            raise CancelledError()
-        store.complete_range(run_id, pending, chunk, observations)
-        return chunk, len(observations), False
+            store.complete_coverage(run_id, selected, chunk, counts)
+        return chunk, sum(counts.values()), False
 
     def observe(result):
         nonlocal total, completed, skipped

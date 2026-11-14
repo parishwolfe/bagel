@@ -3,10 +3,13 @@
 import json
 import math
 
-import psycopg
+from sqlalchemy import Integer, cast, func, select
+from sqlalchemy.orm import Session
 
+from market import models as m
 from market.data.cli import errors
 from market.data.config import Settings
+from market.database import database_engine
 
 
 def estimate(rows: int, total_bytes: int, symbols: int, years: int, minutes_per_day: int):
@@ -31,23 +34,39 @@ def main():
         settings = Settings()
         if not settings.database_url:
             raise ValueError("Set DATABASE_URL to the pilot database")
-        with psycopg.connect(
-            settings.database_url.get_secret_value(), autocommit=True, connect_timeout=10
-        ) as conn:
-            conn.execute("set default_transaction_read_only=on")
-            rows = conn.execute("select count(*) from public.bars").fetchone()
-            size = conn.execute(
-                "select coalesce(sum(pg_total_relation_size(inhrelid)),0) "
-                "from pg_inherits where inhparent='public.bars'::regclass"
-            ).fetchone()
-            assert rows and size
+        engine = database_engine(
+            settings.database_url.get_secret_value(),
+            application_name="bagel-storage-estimate",
+            pool_size=1,
+            timeout=10,
+        )
+        try:
+            with (
+                engine.connect().execution_options(postgresql_readonly=True) as connection,
+                Session(bind=connection) as session,
+            ):
+                rows = session.scalar(select(func.count()).select_from(m.Bar)) or 0
+                size = (
+                    session.scalar(
+                        select(
+                            func.coalesce(
+                                func.sum(func.pg_total_relation_size(m.PostgresInheritance.inhrelid)), 0
+                            )
+                        ).where(
+                            m.PostgresInheritance.inhparent == cast(func.to_regclass("public.bars"), Integer)
+                        )
+                    )
+                    or 0
+                )
+        finally:
+            engine.dispose()
         opening, closing = settings.window_open, settings.window_close
         minutes = closing.hour * 60 + closing.minute - opening.hour * 60 - opening.minute
         print(
             json.dumps(
                 estimate(
-                    rows[0],
-                    int(size[0]),
+                    rows,
+                    int(size),
                     len(settings.symbols),
                     settings.max_history_years,
                     minutes,

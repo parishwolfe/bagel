@@ -12,6 +12,7 @@ class Settings(ResearchSettings):
         default=None, validation_alias="BAGEL_API_KEY", repr=False, validate_default=True
     )
     ingestion_enabled: bool = Field(default=False, validation_alias="BAGEL_INGESTION_ENABLED")
+    external_workers: bool = Field(default=False, validation_alias="BAGEL_EXTERNAL_WORKERS")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO", validation_alias="BAGEL_LOG_LEVEL"
     )

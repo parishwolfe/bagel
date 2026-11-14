@@ -1,0 +1,18 @@
+FROM postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994 AS extension
+# Keep PostgreSQL, libc and PGDATA identical to the existing local volume.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ca-certificates curl libssl-dev "postgresql-server-dev-17=$PG_VERSION" \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+RUN curl --fail --location --proto '=https' --tlsv1.2 \
+      https://codeload.github.com/timescale/timescaledb/tar.gz/refs/tags/2.32.0 -o source.tar.gz \
+    && echo '881b07882719b53b1fe08753a514c5717baaf9644698fd12d58f63a6a86f4ba0  source.tar.gz' | sha256sum -c - \
+    && tar -xzf source.tar.gz --strip-components=1 \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DREGRESS_CHECKS=OFF -DTAP_CHECKS=OFF \
+    && cmake --build build --parallel 4 \
+    && cmake --install build
+
+FROM postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994
+COPY --from=extension /usr/lib/postgresql/17/lib/timescaledb* /usr/lib/postgresql/17/lib/
+COPY --from=extension /usr/share/postgresql/17/extension/timescaledb* /usr/share/postgresql/17/extension/
+CMD ["postgres", "-c", "shared_preload_libraries=timescaledb", "-c", "timescaledb.telemetry_level=off"]

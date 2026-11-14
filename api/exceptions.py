@@ -6,19 +6,19 @@ from sqlalchemy.exc import SQLAlchemyError
 
 
 def missing(_: Request, exc: KeyError) -> JSONResponse:
-    return JSONResponse({"detail": "Research resource not found"}, status_code=404)
+    return JSONResponse({"detail": "Resource not found"}, status_code=404)
 
 
 def invalid(_: Request, exc: ValueError) -> JSONResponse:
-    return JSONResponse({"detail": "Invalid research operation"}, status_code=422)
+    return JSONResponse({"detail": "Invalid local operation"}, status_code=422)
 
 
 def unavailable(_: Request, exc: Exception) -> JSONResponse:
-    return JSONResponse({"detail": "Local research database unavailable"}, status_code=503)
+    return JSONResponse({"detail": "Local database unavailable"}, status_code=503)
 
 
 def invalid_data(_: Request, exc: ValidationError) -> JSONResponse:
-    return JSONResponse({"detail": "Invalid stored research data"}, status_code=500)
+    return JSONResponse({"detail": "Invalid stored resource data"}, status_code=500)
 
 
 def register_exception_handlers(app: FastAPI) -> None:

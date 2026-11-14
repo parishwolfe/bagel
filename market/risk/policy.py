@@ -17,9 +17,7 @@ class RiskLimits(BaseModel):
     min_margin_buffer: Decimal = Field(default=ZERO, ge=0)
 
 
-def order_rejection(
-    ledger: Ledger, fill: Fill, limits: RiskLimits, short_eligible: bool
-) -> str | None:
+def order_rejection(ledger: Ledger, fill: Fill, limits: RiskLimits, short_eligible: bool) -> str | None:
     previous = ledger.position(fill.instrument)
     after, _ = previous.apply(fill.shares, fill.price)
     if abs(after.shares) < abs(previous.shares):

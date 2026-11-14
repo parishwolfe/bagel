@@ -3,14 +3,15 @@
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Self, cast
+from copy import deepcopy
+from typing import Any, Self
 
-import psycopg
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import RowFactory
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Engine, create_engine
+from sqlalchemy import inspect as inspect_model
+from sqlalchemy.orm import Session
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "localhost", "::1", "db"}
 
@@ -87,19 +88,17 @@ def database_engine(dsn: str, *, application_name: str, pool_size: int, timeout:
 
 
 @contextmanager
-def database_connection(
-    engine: Engine, *, row_factory: RowFactory[Any] | None = None
-) -> Iterator[psycopg.Connection[Any]]:
-    # Retain psycopg COPY/cursor support; SQLAlchemy owns checkout, ping and return.
-    pooled = engine.raw_connection()
-    conn = cast(psycopg.Connection[Any], pooled.driver_connection)
-    previous_factory = conn.row_factory
-    try:
-        if row_factory is not None:
-            conn.row_factory = row_factory
-        with conn.transaction():
-            yield conn
-    finally:
-        # The dialect's next pre-ping must see its normal tuple-based cursor.
-        conn.row_factory = previous_factory
-        pooled.close()
+def database_session(engine: Engine) -> Iterator[Session]:
+    """One explicit ORM transaction; never share sessions across threads."""
+    with Session(engine, expire_on_commit=False) as session, session.begin():
+        yield session
+
+
+def row_dict(instance: Any) -> dict:
+    """Detached value view, so nested JSON edits cannot mutate an ORM cache silently."""
+    return {
+        column.name: deepcopy(
+            getattr(instance, inspect_model(type(instance)).get_property_by_column(column).key)
+        )
+        for column in inspect_model(type(instance)).columns
+    }

@@ -6,9 +6,9 @@ to all backend modules under `market/`.
 ## Architecture and code safety
 
 - Never spend cycles formatting backend code or running standalone formatting commands/checks unless explicitly requested. Follow the root formatting policy and leave formatting to pre-commit.
-- Keep existing data, research, risk, portfolio and simulated execution code in `market/`; the HTTP control plane lives in root `api/`. Follow [the backend boundaries](README.md). Do not implement the future multi-node split or add parallel services without separate authorization.
+- Keep existing data, research, risk, portfolio and simulated execution code in `market/`; the HTTP control plane lives in root `api/`. The user explicitly authorized separate workers and the local event platform on November 12, 2026; preserve the existing entry points and domain boundaries.
 - Validate request, provider, and artifact data at their boundaries. Keep domain types separate from transport/SDK objects and enforce bounds on sizes, ranges, and resource consumption.
-- Parameterize SQL values and use driver-supported identifier composition for dynamic identifiers. Never interpolate untrusted values into SQL, shell commands, or file paths.
+- Use SQLAlchemy mapped models and ORM sessions for application database access. No handwritten application SQL, text() wrappers, raw connections or driver COPY. Preserve transaction/locking semantics using ORM expressions. Never interpolate untrusted values into commands or file paths.
 - Avoid shell execution when a library or argument-list subprocess call will do. Do not deserialize untrusted data with executable formats or evaluate user-supplied code.
 - Bound external calls, retries, concurrency, and buffering. Preserve transaction boundaries, cancellation, cleanup, and idempotency; fail safely rather than partially reporting success.
 
@@ -22,4 +22,4 @@ to all backend modules under `market/`.
 
 - Keep research offline with synthetic fixtures and simulated execution. Do not enable broker order submission, provider ingestion, or historical downloads without explicit authorization.
 - Preserve completed-bar semantics, UTC/timezone handling, series identity, and deterministic research inputs. Do not fill missing market prices with invented data.
-- Follow the root testing policy: no unit-test creation or maintenance unless explicitly requested. Use proportionate static checks and temporary local smoke verification instead; clean up your temporary artifacts without disturbing existing data.
+- Follow the root policy: no unit tests at all. Use proportionate static checks, structured container logs and temporary local smoke verification; clean up temporary artifacts without disturbing existing data.

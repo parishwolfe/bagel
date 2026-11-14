@@ -162,19 +162,16 @@ def check_config(
 
 @app.command()
 def run(symbols: str | None = typer.Option(None)):
-    """Run the singleton live worker with continuous historical repair."""
+    """Run Redis-first live ingestion. History/persistence use separate workers."""
     with errors():
         restart = True
         while restart:
             settings = settings_for(symbols)
-            settings.require_credentials()
-            assert settings.database_url is not None
+            if settings.data_relay is None and (not settings.alpaca_api_key or not settings.alpaca_secret_key):
+                raise ValueError("Live ingestion requires provider credentials or the read-only relay")
             provider = AlpacaREST(settings)
             try:
-                with PostgresStore(settings.database_url.get_secret_value()) as store:
-                    restart = asyncio.run(
-                        run_worker(settings, store, provider, reload_settings=lambda: settings_for(symbols))
-                    )
+                restart = asyncio.run(run_worker(settings, provider=provider))
             finally:
                 provider.close()
 
