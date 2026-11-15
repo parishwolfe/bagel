@@ -12,11 +12,16 @@ Mean-reversion
 
 Breakout
 - donchian_breakout : buy N-day highs, exit on N-day lows, on daily bars.
+
+Futures
+- es_trend          : long/short EMA trend on the ES continuous futures series
+                      (CME, $50/pt multiplier, sized in contracts).
 """
 
 from bagel.strategies.buy_and_hold import BuyAndHold
 from bagel.strategies.donchian_breakout import DonchianBreakout
 from bagel.strategies.ema_cross import EmaCross
+from bagel.strategies.es_trend import EsTrend
 from bagel.strategies.multi_tf import MultiTimeframeEma
 from bagel.strategies.rsi_reversion import RsiReversion
 from bagel.strategies.sma_trend import SmaTrend
@@ -25,6 +30,7 @@ __all__ = [
     "BuyAndHold",
     "DonchianBreakout",
     "EmaCross",
+    "EsTrend",
     "MultiTimeframeEma",
     "RsiReversion",
     "SmaTrend",

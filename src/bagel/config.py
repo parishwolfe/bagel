@@ -13,6 +13,7 @@ IB_CLIENT_ID     base TWS-API client id     (default: 1)
 CATALOG_PATH     ParquetDataCatalog root    (default: <project>/data/catalog)
 BAGEL_CAPITAL    backtest starting cash USD (default: 1_000_000)
 USE_RTH          regular-hours-only bars    (default: true)
+FIRSTRATE_SOURCE FirstRate data zips (read)  (default: /Volumes/Seagate/raid5/FirstRateData)
 """
 
 from __future__ import annotations
@@ -71,6 +72,11 @@ class Settings:
     )
     raw_path: Path = ROOT / "data" / "raw"
     use_rth: bool = _as_bool(os.environ.get("USE_RTH", "true"))
+
+    # --- FirstRate (vendor) data: read-only source of the ES futures zips ---
+    firstrate_source: Path = Path(
+        os.environ.get("FIRSTRATE_SOURCE", "/Volumes/Seagate/raid5/FirstRateData")
+    )
 
     # --- backtest defaults ---
     venue: str = "ARCA"  # all our ETFs resolve on NYSE Arca via IB

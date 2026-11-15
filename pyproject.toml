@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 bagel = "bagel:main"
 bagel-download = "bagel.ingest.ib_history:main"
+bagel-firstrate = "bagel.ingest.firstrate:main"
 bagel-backtest = "bagel.backtest.run:main"
 
 [build-system]
