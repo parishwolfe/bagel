@@ -122,11 +122,17 @@ data/
 
 ## Code quality
 
-`pre-commit` runs **ruff** (lint with autofix) and **ruff-format**:
+`pre-commit` runs **Gitleaks** (secret detection), **ruff** (lint with autofix),
+and **ruff-format**:
 
 ```bash
 pre-commit run --all-files
 ```
+
+Gitleaks blocks commits when it detects secrets in staged changes and redacts
+secret values in its output. Its hook scans staged changes even with `--all-files`;
+it does not audit the repository's full contents or history. The first run builds
+the pinned Gitleaks version using pre-commit's managed Go environment.
 
 The ruff ruleset is pinned in `pyproject.toml` (`[tool.ruff.lint]`) for
 reproducibility, since ruff's defaults drift between releases.
