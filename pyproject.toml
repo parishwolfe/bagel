@@ -1,0 +1,30 @@
+[project]
+name = "bagel"
+version = "0.1.0"
+description = "Project Bagel: ifykyk"
+readme = "README.md"
+authors = [
+    { name = "Parish Wolfe", email = "parishwolfe@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "nautilus-trader==2.0.0rc9",
+    "pandas>=3.1.1",
+]
+
+[project.scripts]
+bagel = "bagel:main"
+bagel-download = "bagel.ingest.ib_history:main"
+bagel-backtest = "bagel.backtest.run:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+# Pinned for reproducibility — ruff's default rule set drifts between releases.
+# pyflakes (F), pycodestyle errors/warnings (E/W), isort (I), pyupgrade (UP).
+select = ["E4", "E7", "E9", "F", "I", "UP", "W"]

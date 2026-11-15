@@ -1,0 +1,11 @@
+# Ruff lint (with autofix) + formatter. pre-commit is already installed in this
+# repo (.git/hooks/pre-commit); run `pre-commit run --all-files` to apply.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      # Linter — autofix is enabled via --fix.
+      - id: ruff-check
+        args: [--fix]
+      # Formatter.
+      - id: ruff-format
