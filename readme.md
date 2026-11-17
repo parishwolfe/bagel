@@ -120,6 +120,13 @@ data/
   raw/                 # kept empty — FirstRate ingest is ephemeral (temp dir, no residue)
 ```
 
+## Lox research orchestrator
+
+[Lox](src/lox/README.md) adds an installable OpenCode parent/subagent workflow,
+readable research lists, and parallel parameter sweeps over native Nautilus
+strategies in `src/bagel/strategies/`. See its README for setup on the research
+machine. It has no Git automation or live-trading integration.
+
 ## Code quality
 
 `pre-commit` runs **Gitleaks** (secret detection), **ruff** (lint with autofix),

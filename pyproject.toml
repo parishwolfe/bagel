@@ -2,7 +2,7 @@
 name = "bagel"
 version = "0.1.0"
 description = "Project Bagel: ifykyk"
-readme = "README.md"
+readme = "readme.md"
 authors = [
     { name = "Parish Wolfe", email = "parishwolfe@gmail.com" }
 ]
@@ -17,6 +17,10 @@ bagel = "bagel:main"
 bagel-download = "bagel.ingest.ib_history:main"
 bagel-firstrate = "bagel.ingest.firstrate:main"
 bagel-backtest = "bagel.backtest.run:main"
+lox = "lox.cli:main"
+
+[tool.uv.build-backend]
+module-name = ["bagel", "lox"]
 
 [build-system]
 requires = ["uv_build>=0.13.8,<0.14.0"]

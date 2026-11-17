@@ -128,3 +128,9 @@ cython_debug/
 
 # project specific
 data/
+
+# Lox runtime artifacts (the four Markdown research lists remain tracked)
+research/.lock
+research/.active
+research/STOP
+research/topics/
