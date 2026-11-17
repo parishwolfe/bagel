@@ -1,0 +1,73 @@
+# Lox settings. Agents cannot edit this file (it lives outside research/).
+# Point LOX_SETTINGS at another TOML file to override individual keys.
+
+[account]
+capital = 50000        # USD the backtests start with
+max_leverage = 1.0     # gross exposure cap, as a multiple of account equity
+
+# Costs applied to every fill. "base" is what a result is judged on; "stress"
+# is the harsher rerun a candidate must survive.
+# commission_per_share is rounded up to a whole cent (Nautilus Money precision).
+[costs.base]
+commission_per_share = 0.0   # IBKR Lite: $0 on US stocks and ETFs
+commission_per_order = 0.0
+slippage_ticks = 1           # 0 or 1 tick against you on every fill
+
+[costs.stress]
+commission_per_share = 0.01  # one extra cent per share each way
+commission_per_order = 0.0
+slippage_ticks = 1
+
+# Data windows. Parameters are chosen on "train" and judged on "validate".
+# Everything after validate_end is the vault: lox never reads it.
+[windows.minute]
+train_start = "2024-11-14"
+train_end = "2025-12-31"
+validate_start = "2026-01-01"
+validate_end = "2026-08-31"
+
+[windows.daily]
+train_start = "2011-11-16"
+train_end = "2019-12-31"
+validate_start = "2020-01-01"
+validate_end = "2024-12-31"
+
+# Smoke test window: this many calendar days from train_start.
+[smoke]
+minute_days = 90
+daily_days = 1100
+
+# What earns a row in the candidates file. All checks use the validate window.
+[flag]
+min_annual_return = 0.36
+must_beat_buy_and_hold = true
+min_trades = 30
+require_profit_under_stress = true
+min_neighbor_profitable_share = 0.5
+
+[sweep]
+min_variants = 3
+min_runs_per_variant = 4
+max_runs = 3000            # larger grids are sampled down to this, reproducibly
+max_workers = 0            # 0 = CPU count minus 2
+run_timeout_seconds = 60   # one backtest
+budget_seconds = 90        # one `lox sweep` call; it resumes on the next call
+top_k_validate = 10
+memory_limit_mb = 8192     # per worker, where the OS enforces it (Linux)
+
+[pipeline]
+max_research_rounds = 2
+max_design_rounds = 3
+max_code_rounds = 4
+max_review_rounds = 2
+max_analyze_rounds = 2
+max_consecutive_failures = 3
+min_free_disk_gb = 5
+stall_minutes = 45
+
+# `lox record` commits research/ only when the checkout is on this branch.
+[git]
+enabled = true
+branch = "lox/research"
+remote = "origin"
+push = false               # set true once the scoped token is in place

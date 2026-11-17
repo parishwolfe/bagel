@@ -17,10 +17,16 @@ bagel = "bagel:main"
 bagel-download = "bagel.ingest.ib_history:main"
 bagel-firstrate = "bagel.ingest.firstrate:main"
 bagel-backtest = "bagel.backtest.run:main"
+lox = "lox.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.8,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# Two top-level modules in one distribution: bagel (the lab) and lox (the
+# research pipeline that drives it).
+module-name = ["bagel", "lox"]
 
 [tool.ruff]
 target-version = "py314"

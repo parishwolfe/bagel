@@ -1,0 +1,26 @@
+{
+  "timeframe": "minute",
+  "mode": "single",
+  "symbols": ["SPY", "QQQ", "TQQQ"],
+  "warmup_days": 0,
+  "variants": [
+    {
+      "name": "breakout",
+      "class": "OrbBreakout",
+      "description": "First breakout in either direction, stop at the far side of the range.",
+      "grid": {"range_minutes": [5, 15, 30, 60], "last_entry_minute": [120, 240]}
+    },
+    {
+      "name": "long-only",
+      "class": "OrbLongOnly",
+      "description": "Upside breakouts only.",
+      "grid": {"range_minutes": [5, 15, 30, 60], "last_entry_minute": [120, 240]}
+    },
+    {
+      "name": "target",
+      "class": "OrbTarget",
+      "description": "Either direction with a profit target at a multiple of the range height.",
+      "grid": {"range_minutes": [5, 15, 30], "last_entry_minute": [240], "target_multiple": [1.0, 2.0, 3.0]}
+    }
+  ]
+}

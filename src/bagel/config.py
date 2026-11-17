@@ -11,7 +11,7 @@ IB_HOST          IB Gateway host            (default: 127.0.0.1)
 IB_PORT          IB Gateway API port        (default: 4002  -> Gateway paper)
 IB_CLIENT_ID     base TWS-API client id     (default: 1)
 CATALOG_PATH     ParquetDataCatalog root    (default: <project>/data/catalog)
-BAGEL_CAPITAL    backtest starting cash USD (default: 1_000_000)
+BAGEL_CAPITAL    backtest starting cash USD (default: 50_000)
 USE_RTH          regular-hours-only bars    (default: true)
 FIRSTRATE_SOURCE FirstRate data zips (read)  (default: /Volumes/Seagate/raid5/FirstRateData)
 """
@@ -81,7 +81,7 @@ class Settings:
     # --- backtest defaults ---
     venue: str = "ARCA"  # all our ETFs resolve on NYSE Arca via IB
     currency: str = "USD"
-    starting_capital: int = int(os.environ.get("BAGEL_CAPITAL", "1000000"))
+    starting_capital: int = int(os.environ.get("BAGEL_CAPITAL", "50000"))
 
     def ensure_dirs(self) -> Settings:
         self.catalog_path.mkdir(parents=True, exist_ok=True)

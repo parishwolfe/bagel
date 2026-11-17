@@ -128,3 +128,9 @@ cython_debug/
 
 # project specific
 data/
+
+# lox: raw sweep results are regenerable; summaries and verdicts are tracked
+research/topics/*/results/
+research/.lock
+research/.control.json
+research/scout/

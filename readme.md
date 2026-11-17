@@ -120,6 +120,12 @@ data/
   raw/                 # kept empty — FirstRate ingest is ephemeral (temp dir, no residue)
 ```
 
+## Lox
+
+`src/lox/` is a strategy-research pipeline that runs on top of bagel: OpenCode
+agents research a strategy, code its variations, sweep the parameters and judge
+the result on held-out data. See [`src/lox/README.md`](src/lox/README.md).
+
 ## Code quality
 
 `pre-commit` runs **Gitleaks** (secret detection), **ruff** (lint with autofix),
@@ -139,10 +145,11 @@ reproducibility, since ruff's defaults drift between releases.
 
 ## Notes & caveats
 
-- ETF sample strategies trade a **fixed 100 shares**, a small slice of the $1M
-  book, so reported returns are small — position sizing is a deliberate next
-  knob. `es_trend` trades **1 ES contract** (~$200k notional), so its PnL is a
-  much larger slice.
+- The book starts at **$50,000** (`BAGEL_CAPITAL`). ETF sample strategies still
+  trade a **fixed 100 shares**, which for SPY or QQQ is more than the whole
+  book, and `es_trend` trades **1 ES contract** (several times the book), so
+  treat their return percentages as illustrations. Pass `--trade-size` to scale
+  them down. Strategies researched through `lox` size against equity instead.
 - Backtests use a **zero-fee, margin, USD** simulated venue (ARCA for ETFs,
   XCME for ES). Add a realistic fee/commission model before trusting absolute
   PnL — futures commissions in particular are per-contract.
