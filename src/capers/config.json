@@ -1,0 +1,15 @@
+{
+    "users": [
+        "@pm_wolfe"
+    ],
+    "options": {
+        "login": "@pm_wolfe",
+        "dirname-pattern": "~/Desktop/capers/{target}",
+        "reels": true,
+        "no-posts": true,
+        "no-profile-pic": true,
+        "no-video-thumbnails": true,
+        "no-captions": true,
+        "no-metadata-json": true
+    }
+}
