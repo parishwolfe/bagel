@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "instaloader>=4.16",
     "nautilus-trader==2.0.0rc9",
     "pandas>=3.1.1",
 ]
