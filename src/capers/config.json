@@ -1,14 +1,9 @@
 {
-    "users": [
-        "@pm_wolfe"
+    "videos": [
+        ""
     ],
     "options": {
-        "load-cookies": "chrome",
         "dirname-pattern": "~/Desktop/capers/{target}",
-        "reels": true,
-        "post-filter": "datetime(2026, 7, 20) < date_utc < datetime(2026, 9, 18)",
-        "no-posts": true,
-        "no-profile-pic": true,
         "no-video-thumbnails": true,
         "no-captions": true,
         "no-metadata-json": true

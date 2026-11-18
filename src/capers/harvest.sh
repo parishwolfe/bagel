@@ -12,13 +12,16 @@ for dependency in jq instaloader; do
     fi
 done
 
-jq -e '(.options | type == "object") and (.users | type == "array")' "$config" >/dev/null
+jq -e '
+    (.options | type == "object") and
+    (.videos | type == "array") and
+    (.videos | all(.[]; type == "string"))
+' "$config" >/dev/null
 
 options=()
 while IFS= read -r option; do
-    # Normalize usernames and expand output paths without evaluating shell code.
+    # Expand output paths without evaluating shell code.
     case "$option" in
-        --login=@*) option="--login=${option#--login=@}" ;;
         "--dirname-pattern=~") option="--dirname-pattern=$HOME" ;;
         "--dirname-pattern=~/"*) option="--dirname-pattern=$HOME/${option#--dirname-pattern=\~/}" ;;
     esac
@@ -31,7 +34,23 @@ done < <(jq -r '
     end
 ' "$config")
 
-while IFS= read -r user; do
-    printf 'Downloading Reels from %s\n' "$user"
-    instaloader "${options[@]}" -- "${user#@}"
-done < <(jq -r '.users[]' "$config")
+first_download=true
+reel_url_pattern='^https://(www\.)?instagram\.com/reels?/([A-Za-z0-9_-]+)/?(\?[^#]*)?(#.*)?$'
+
+while IFS= read -r url; do
+    if [[ ! "$url" =~ $reel_url_pattern ]]; then
+        printf 'Invalid Instagram Reel URL: %s\n' "$url" >&2
+        exit 1
+    fi
+    shortcode="${BASH_REMATCH[2]}"
+
+    if [[ "$first_download" == false ]]; then
+        delay=$((RANDOM % 4 + 2))
+        printf 'Waiting %s seconds before the next download\n' "$delay"
+        sleep "$delay"
+    fi
+
+    printf 'Downloading Reel %s\n' "$shortcode"
+    instaloader "${options[@]}" -- "-$shortcode"
+    first_download=false
+done < <(jq -r '.videos[]' "$config")
