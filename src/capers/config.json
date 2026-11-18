@@ -1,9 +1,10 @@
 {
-    "videos": [
-        ""
-    ],
+    "wait-seconds": {
+        "min": 2,
+        "max": 5
+    },
     "options": {
-        "dirname-pattern": "~/Desktop/capers/{target}",
+        "dirname-pattern": "~/Desktop/capers",
         "no-video-thumbnails": true,
         "no-captions": true,
         "no-metadata-json": true

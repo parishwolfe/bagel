@@ -8,15 +8,28 @@ for dependency in brew macparakeet-cli jq instaloader; do
     fi
 done
 
-# Find config.json beside this script, regardless of the current directory.
+# Find input files beside this script, regardless of the current directory.
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 config="$script_dir/config.json"
+targets="$script_dir/targets.txt"
 
-jq -e '
+if ! jq -e '
+    .["wait-seconds"].min as $min |
+    .["wait-seconds"].max as $max |
     (.options | type == "object") and
-    (.videos | type == "array") and
-    (.videos | all(.[]; type == "string"))
-' "$config" >/dev/null
+    ([$min, $max] | all(.[]; type == "number" and . == floor and . >= 0 and . <= 32767)) and
+    ($min <= $max)
+' "$config" >/dev/null; then
+    printf 'Config requires options and wait-seconds with integers 0 <= min <= max <= 32767\n' >&2
+    exit 1
+fi
+min_wait="$(jq -r '.["wait-seconds"].min | floor' "$config")"
+max_wait="$(jq -r '.["wait-seconds"].max | floor' "$config")"
+
+if [[ ! -f "$targets" ]]; then
+    printf 'Create %s with one Instagram Reel URL per line\n' "$targets" >&2
+    exit 1
+fi
 
 options=()
 output_dir=""
@@ -38,10 +51,9 @@ done < <(jq -r '
     end
 ' "$config")
 
-# Search the configured download folder, including its per-Reel subfolders.
-output_dir="${output_dir%/\{target\}}"
+# Downloads and transcripts share one flat output folder.
 if [[ -z "$output_dir" || "$output_dir" == *'{'* || "$output_dir" == *'}'* ]]; then
-    printf 'dirname-pattern must be a folder, optionally ending in /{target}\n' >&2
+    printf 'dirname-pattern must be a folder without placeholders\n' >&2
     exit 1
 fi
 mkdir -p -- "$output_dir"
@@ -49,7 +61,11 @@ mkdir -p -- "$output_dir"
 first_download=true
 reel_url_pattern='^https://(www\.)?instagram\.com/reels?/([A-Za-z0-9_-]+)/?(\?[^#]*)?(#.*)?$'
 
-while IFS= read -r url; do
+while IFS= read -r url || [[ -n "$url" ]]; do
+    url="${url%$'\r'}"
+    if [[ "$url" =~ ^[[:space:]]*$ ]]; then
+        continue
+    fi
     if [[ ! "$url" =~ $reel_url_pattern ]]; then
         printf 'Invalid Instagram Reel URL: %s\n' "$url" >&2
         exit 1
@@ -57,7 +73,7 @@ while IFS= read -r url; do
     shortcode="${BASH_REMATCH[2]}"
 
     if [[ "$first_download" == false ]]; then
-        delay=$((RANDOM % 4 + 2))
+        delay=$((RANDOM % (max_wait - min_wait + 1) + min_wait))
         printf 'Waiting %s seconds before the next download\n' "$delay"
         sleep "$delay"
     fi
@@ -65,25 +81,42 @@ while IFS= read -r url; do
     printf 'Downloading Reel %s\n' "$shortcode"
     instaloader "${options[@]}" -- "-$shortcode"
     first_download=false
-done < <(jq -r '.videos[]' "$config")
+done < "$targets"
 
-# Only start transcription once every download has finished.
+# Flatten videos and transcripts left by earlier runs; never overwrite files.
+while IFS= read -r -d '' file; do
+    destination="$output_dir/${file##*/}"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        printf 'Cannot flatten; filename already exists: %s\n' "$destination" >&2
+        exit 1
+    fi
+    mv -- "$file" "$destination"
+done < <(find "$output_dir" -mindepth 2 -type f \( -iname '*.mp4' -o -name '*.txt' \) -print0)
+find "$output_dir" -depth -mindepth 1 -type d -empty -delete
+
+# Pass every video in one call so the transcription model is loaded only once.
+videos=()
 while IFS= read -r -d '' video; do
     transcript="${video%.*}.txt"
-    if [[ -e "$transcript" ]]; then
+    if [[ -e "$transcript" || -L "$transcript" ]]; then
         printf 'Transcript already exists; keeping video: %s\n' "$video" >&2
         exit 1
     fi
+    videos+=("$video")
+done < <(find "$output_dir" -maxdepth 1 -type f -iname '*.mp4' -print0)
 
-    printf 'Transcribing %s\n' "$video"
-    temporary_transcript="$(mktemp "$transcript.XXXXXX")"
-    if macparakeet-cli transcribe "$video" --format transcript --no-history > "$temporary_transcript" &&
-        [[ -s "$temporary_transcript" ]]; then
-        mv -- "$temporary_transcript" "$transcript"
-        rm -- "$video"
-    else
-        rm -- "$temporary_transcript"
-        printf 'Transcription failed or was empty; keeping video: %s\n' "$video" >&2
+if [[ ${#videos[@]} -eq 0 ]]; then
+    exit 0
+fi
+
+macparakeet-cli transcribe "${videos[@]}" \
+    --output-dir "$output_dir" --format transcript --no-history
+
+# Keep all videos if the batch fails or any transcript is missing or empty.
+for video in "${videos[@]}"; do
+    if [[ ! -f "${video%.*}.txt" || ! -s "${video%.*}.txt" ]]; then
+        printf 'Missing or empty transcript; keeping videos: %s\n' "$video" >&2
         exit 1
     fi
-done < <(find "$output_dir" -type f -iname '*.mp4' -print0)
+done
+rm -- "${videos[@]}"
