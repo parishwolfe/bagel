@@ -129,3 +129,4 @@ cython_debug/
 # project specific
 data/
 /src/capers/targets.txt
+research-papers/
