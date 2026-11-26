@@ -1,7 +1,9 @@
 # Bagel
 
+![OCaml](OCaml.png)
+
 A NautilusTrader lab for pulling historical market data from **Interactive
-Brokers** and backtesting strategies offline. Classified schmear research.
+Brokers** and backtesting strategies offline. Classified research.
 
 - Python **3.14** (managed by `uv`), NautilusTrader **2.0.0rc9**
 - Data sources: **IB Gateway** (paper, TWS API port `4002`) for ETFs, and
