@@ -1,5 +1,7 @@
 # Bagel
 
+![OCaml](OCaml.png)
+
 A NautilusTrader lab for pulling historical market data from **Interactive
 Brokers** and backtesting strategies offline. Classified schmear research.
 
